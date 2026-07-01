@@ -11,6 +11,7 @@ import {
   initiatePayout,
   providerFromPhone,
 } from "../services/pawapay.service.js";
+import { distributeShareOut } from "../services/shareout.service.js";
 
 const router = express.Router();
 
@@ -147,6 +148,17 @@ async function executeApproval(approval, req) {
   if (approval.type === "group-deletion" && approval.groupId) {
     await Group.findByIdAndUpdate(approval.groupId, { status: "closed" });
     return { type: "group-closed", groupId: approval.groupId };
+  }
+
+  if (approval.type === "share-out" && approval.groupId) {
+    const group = await Group.findById(approval.groupId);
+    if (!group) return null;
+    const result = await distributeShareOut(group);
+    return {
+      type: "share-out-distributed",
+      groupId: approval.groupId,
+      payouts: result.payouts,
+    };
   }
 
   return { type: approval.type, note: "Approved (no automated action)" };

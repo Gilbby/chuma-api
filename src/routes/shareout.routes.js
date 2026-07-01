@@ -1,18 +1,17 @@
 import express from "express";
 import { Group } from "../models/Group.js";
 import { Penalty } from "../models/Penalty.js";
-import { Transaction } from "../models/Transaction.js";
+import { Approval } from "../models/Approval.js";
+import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
-import { generateReceiptId } from "../utils/helpers.js";
 import {
   computeShareOut,
   estimateGroupProfit,
+  getRequiredApprovals,
+  countAdmins,
 } from "../services/logic.service.js";
-import {
-  initiatePayout,
-  providerFromPhone,
-} from "../services/pawapay.service.js";
+import { distributeShareOut } from "../services/shareout.service.js";
 
 const router = express.Router();
 
@@ -63,16 +62,24 @@ router.get(
 );
 
 /**
- * POST /api/shareout/:groupId/distribute  (auth, chairperson)
- * Pays each member their share via PawaPay payout, then resets the cycle.
- * (In production, gate this behind an approved share-out approval.)
+ * POST /api/shareout/:groupId/propose  (auth)
+ * Creates a pending share-out Approval routed to admins instead of paying
+ * out immediately. Only one pending share-out approval per group at a time.
  */
 router.post(
-  "/:groupId/distribute",
+  "/:groupId/propose",
   requireAuth,
   asyncHandler(async (req, res) => {
     const group = await Group.findById(req.params.groupId);
     if (!group) return res.status(404).json({ error: "Group not found" });
+
+    const existing = await Approval.findOne({
+      groupId: group._id,
+      type: "share-out",
+      status: "pending",
+    });
+    if (existing)
+      return res.status(400).json({ error: "Share-out already pending" });
 
     const penaltyIncome = await Penalty.find({
       groupId: group._id,
@@ -88,52 +95,69 @@ router.post(
       penaltyIncome
     );
 
-    const activeMembers = group.members.filter((m) => m.status === "active");
-    const members = activeMembers.map((m) => ({
-      id: String(m.userId || m._id),
-      name: m.name,
-      contribution: m.savings,
-    }));
+    const members = group.members
+      .filter((m) => m.status === "active")
+      .map((m) => ({
+        id: String(m.userId || m._id),
+        name: m.name,
+        contribution: m.savings,
+      }));
+
     const result = computeShareOut(members, profit);
 
-    // Pay each member their share
-    const payouts = [];
-    for (const m of activeMembers) {
-      const calc = result.members.find(
-        (r) => r.id === String(m.userId || m._id)
-      );
-      if (!calc || calc.share <= 0) continue;
-      const payout = await initiatePayout({
-        amount: calc.share,
-        phone: m.phone,
-        provider: providerFromPhone(m.phone || ""),
-        statementDescription: "Chuma share-out",
-      });
-      await Transaction.create({
-        groupId: group._id,
-        groupName: group.name,
-        memberId: m.userId,
-        memberName: m.name,
-        type: "share-out",
-        amount: calc.share,
-        status: payout.simulated ? "completed" : "pending",
-        note: "Cycle share-out",
-        receiptId: generateReceiptId("CHM"),
-        pawapay: { payoutId: payout.id, status: payout.status },
-      });
-      payouts.push({ member: m.name, amount: calc.share, payoutId: payout.id });
-    }
+    const required = getRequiredApprovals(
+      group.constitution?.approvalThreshold || "majority",
+      countAdmins(group.members)
+    );
 
-    // Reset cycle: zero member savings + group pool, start a new cycle
-    group.members.forEach((m) => {
-      m.savings = 0;
-      m.contributions = 0;
+    const approval = await Approval.create({
+      groupId: group._id,
+      groupName: group.name,
+      type: "share-out",
+      title: `Share-out distribution — ${group.name}`,
+      description: `Approve end-of-cycle distribution of K${result.totalToDistribute} to members.`,
+      amount: result.totalToDistribute,
+      requestedById: req.userId,
+      requestedBy: req.user.name,
+      requiredApprovals: required,
     });
-    group.totalSavings = 0;
-    group.cycleProgress = 0;
-    await group.save();
 
-    res.json({ message: "Share-out distributed", payouts, summary: result });
+    // Notify admins
+    const admins = group.members.filter((m) =>
+      ["Chairperson", "Treasurer", "Secretary"].includes(m.role)
+    );
+    await Notification.insertMany(
+      admins
+        .filter((a) => a.userId)
+        .map((a) => ({
+          userId: a.userId,
+          type: "governance",
+          title: "Share-out approval needed",
+          body: `${req.user.name} proposed a share-out of K${result.totalToDistribute} in ${group.name}.`,
+          groupId: group._id,
+          groupName: group.name,
+        }))
+    );
+
+    res.status(201).json({ approval });
+  })
+);
+
+/**
+ * POST /api/shareout/:groupId/distribute  (auth, chairperson)
+ * Pays each member their share via PawaPay payout, then resets the cycle.
+ * (In production, gate this behind an approved share-out approval.)
+ */
+router.post(
+  "/:groupId/distribute",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const group = await Group.findById(req.params.groupId);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+
+    const { payouts, summary } = await distributeShareOut(group);
+
+    res.json({ message: "Share-out distributed", payouts, summary });
   })
 );
 
