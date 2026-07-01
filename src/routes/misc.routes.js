@@ -243,6 +243,37 @@ router.get(
   })
 );
 
+/** GET /api/groups/:groupId/transactions?type=&range= (auth)
+ *  Group-wide ledger — all members' transactions. Members only. */
+router.get(
+  "/groups/:groupId/transactions",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const group = await Group.findById(req.params.groupId);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+
+    const isMember = group.members.some(
+      (m) => String(m.userId) === String(req.userId)
+    );
+    if (!isMember)
+      return res.status(403).json({ error: "Not a member of this group" });
+
+    const filter = { groupId: req.params.groupId };
+    if (req.query.type && req.query.type !== "all") filter.type = req.query.type;
+    if (req.query.range && req.query.range !== "all") {
+      const now = Date.now();
+      const days =
+        req.query.range === "week" ? 7 : req.query.range === "month" ? 30 : 90;
+      filter.date = { $gte: new Date(now - days * 24 * 60 * 60 * 1000) };
+    }
+
+    const transactions = await Transaction.find(filter)
+      .sort({ date: -1 })
+      .limit(500);
+    res.json({ transactions });
+  })
+);
+
 // ─── REPORTS ────────────────────────────────────────────────────────────────
 
 /** GET /api/reports/:groupId (auth) — computed analytics for a group */
