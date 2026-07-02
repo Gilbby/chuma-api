@@ -2,6 +2,8 @@ import express from "express";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
 import { Otp } from "../models/Otp.js";
+import { Group } from "../models/Group.js";
+import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth, signToken } from "../middleware/auth.js";
 import {
@@ -132,6 +134,34 @@ router.post(
     // signup: create a stub user if not present, return token to finish setup
     if (!user) {
       user = await User.create({ name: "New member", phone: normalized });
+
+      // Back-fill any phone-based invites so this new user sees pending
+      // invitations in-app. Resilient: signup must still succeed if this fails.
+      try {
+        const invitingGroups = await Group.find({
+          members: { $elemMatch: { phone: normalized, status: "pending" } },
+        });
+        for (const group of invitingGroups) {
+          const member = group.members.find(
+            (m) => m.phone === normalized && m.status === "pending"
+          );
+          if (member) {
+            member.userId = user._id; // keep status "pending" — they still accept
+            await group.save();
+          }
+          await Notification.create({
+            userId: user._id,
+            type: "invite",
+            title: "Group invitation",
+            body: `You've been invited to join ${group.name}.`,
+            groupId: group._id,
+            groupName: group.name,
+            invitedBy: group.name,
+          });
+        }
+      } catch (err) {
+        console.error("Invite back-fill failed on signup:", err);
+      }
     }
     user.pinResetAllowedUntil = pinResetAllowedUntil;
     await user.save();
