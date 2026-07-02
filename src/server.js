@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import compression from "compression";
 import morgan from "morgan";
 import rateLimit from "express-rate-limit";
 
@@ -26,7 +27,9 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ limit: "2mb" }));
+app.use(compression());
+// Payloads are small JSON (no base64 uploads); keep the limit tight
+app.use(express.json({ limit: "100kb" }));
 app.use(morgan(config.env === "development" ? "dev" : "combined"));
 
 // Basic rate limiting on auth (OTP abuse protection)

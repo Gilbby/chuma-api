@@ -4,9 +4,9 @@ const { Schema } = mongoose;
 
 const penaltySchema = new Schema(
   {
-    groupId: { type: Schema.Types.ObjectId, ref: "Group", required: true, index: true },
+    groupId: { type: Schema.Types.ObjectId, ref: "Group", required: true },
     groupName: { type: String },
-    memberId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    memberId: { type: Schema.Types.ObjectId, ref: "User", required: true },
     memberName: { type: String },
 
     violationType: {
@@ -26,12 +26,16 @@ const penaltySchema = new Schema(
       type: String,
       enum: ["pending", "paid"],
       default: "pending",
-      index: true,
     },
     dueContext: { type: String },
   },
   { timestamps: true }
 );
+
+// Group penalty listings and paid-penalty income sums ({ groupId, status })
+penaltySchema.index({ groupId: 1, status: 1 });
+// "My penalties" listing, newest first
+penaltySchema.index({ memberId: 1, createdAt: -1 });
 
 export const Penalty = mongoose.model("Penalty", penaltySchema);
 export default Penalty;

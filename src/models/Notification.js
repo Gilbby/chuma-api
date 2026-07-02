@@ -5,7 +5,7 @@ const { Schema } = mongoose;
 const notificationSchema = new Schema(
   {
     // Recipient
-    userId: { type: Schema.Types.ObjectId, ref: "User", index: true },
+    userId: { type: Schema.Types.ObjectId, ref: "User" },
 
     type: {
       type: String,
@@ -37,6 +37,9 @@ const notificationSchema = new Schema(
   },
   { timestamps: true }
 );
+
+// Inbox listing, newest first; the userId prefix also covers read-all updates
+notificationSchema.index({ userId: 1, createdAt: -1 });
 
 export const Notification = mongoose.model("Notification", notificationSchema);
 export default Notification;

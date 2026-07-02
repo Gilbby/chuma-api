@@ -28,9 +28,9 @@ router.post(
     if (!amount || amount <= 0)
       return res.status(400).json({ error: "Enter a valid amount" });
 
-    const group = await Group.findById(groupId);
+    const group = await Group.findById(groupId).lean();
     if (!group) return res.status(404).json({ error: "Group not found" });
-    if (isGroupLocked(group.toObject()))
+    if (isGroupLocked(group))
       return res.status(423).json({ error: "Group is locked (fee unpaid)" });
 
     const phone = payerPhone || req.user.phone;
@@ -54,17 +54,26 @@ router.post(
           .json({ error: "Payment rejected", detail: deposit.error });
     }
 
-    // Update member's savings + group rollup
-    const member = group.members.find(
-      (m) => String(m.userId) === String(req.userId)
+    // Update member's savings + group rollup atomically ($inc avoids the
+    // read-modify-write race when members contribute at the same time)
+    const updated = await Group.updateOne(
+      { _id: groupId, "members.userId": req.userId },
+      {
+        $inc: {
+          "members.$.savings": amount,
+          "members.$.contributions": 1,
+          totalSavings: amount,
+          walletBalance: amount,
+        },
+      }
     );
-    if (member) {
-      member.savings += amount;
-      member.contributions += 1;
+    if (updated.matchedCount === 0) {
+      // Contributor has no member row; still credit the group rollups
+      await Group.updateOne(
+        { _id: groupId },
+        { $inc: { totalSavings: amount, walletBalance: amount } }
+      );
     }
-    group.totalSavings += amount;
-    group.walletBalance += amount;
-    await group.save();
 
     const txn = await Transaction.create({
       groupId,

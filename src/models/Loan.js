@@ -17,7 +17,7 @@ const loanHistorySchema = new Schema(
 
 const loanSchema = new Schema(
   {
-    groupId: { type: Schema.Types.ObjectId, ref: "Group", required: true, index: true },
+    groupId: { type: Schema.Types.ObjectId, ref: "Group", required: true },
     groupName: { type: String },
     memberId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     memberName: { type: String },
@@ -46,6 +46,9 @@ const loanSchema = new Schema(
   },
   { timestamps: true }
 );
+
+// Covers group loan listings and open-loan counts ({ groupId, status })
+loanSchema.index({ groupId: 1, status: 1 });
 
 export const Loan = mongoose.model("Loan", loanSchema);
 export default Loan;

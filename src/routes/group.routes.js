@@ -56,7 +56,7 @@ router.get(
     const groups = await Group.find({
       "members.userId": req.userId,
       status: { $ne: "closed" },
-    });
+    }).lean();
     res.json({ groups: groups.map(withFeeStatus) });
   })
 );
@@ -68,7 +68,7 @@ router.get(
   "/:id",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.id);
+    const group = await Group.findById(req.params.id).lean();
     if (!group) return res.status(404).json({ error: "Group not found" });
     res.json({ group: withFeeStatus(group) });
   })
@@ -241,13 +241,12 @@ router.get(
   "/:id/fee",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.id);
-    if (!group) return res.status(404).json({ error: "Group not found" });
-    const g = group.toObject();
+    const g = await Group.findById(req.params.id).lean();
+    if (!g) return res.status(404).json({ error: "Group not found" });
     res.json({
-      groupId: group._id,
-      groupName: group.name,
-      monthlyFee: group.monthlyFee,
+      groupId: g._id,
+      groupName: g.name,
+      monthlyFee: g.monthlyFee,
       monthsOwed: getMonthsOwed(g),
       amountOwed: getAmountOwed(g),
       grace: getGraceInfo(g),

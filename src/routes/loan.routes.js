@@ -31,7 +31,7 @@ router.get(
   "/eligibility",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.query.groupId);
+    const group = await Group.findById(req.query.groupId).lean();
     if (!group) return res.status(404).json({ error: "Group not found" });
     const member = group.members.find(
       (m) => String(m.userId) === String(req.userId)
@@ -208,7 +208,7 @@ router.get(
     const filter = {};
     if (req.query.groupId) filter.groupId = req.query.groupId;
     if (req.query.mine === "true") filter.memberId = req.userId;
-    const loans = await Loan.find(filter).sort({ createdAt: -1 });
+    const loans = await Loan.find(filter).sort({ createdAt: -1 }).lean();
     res.json({ loans });
   })
 );

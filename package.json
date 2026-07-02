@@ -9,13 +9,19 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/utils/seed.js"
   },
-  "keywords": ["village-banking", "chuma", "zambia", "fintech"],
+  "keywords": [
+    "village-banking",
+    "chuma",
+    "zambia",
+    "fintech"
+  ],
   "author": "Chuma",
   "license": "UNLICENSED",
   "dependencies": {
     "africastalking": "^0.7.0",
-    "axios": "^1.7.7",
+    "axios": "^1.18.1",
     "bcryptjs": "^2.4.3",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
@@ -24,9 +30,14 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.7.0",
     "morgan": "^1.10.0",
-    "uuid": "^10.0.0"
+    "uuid": "^11.1.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"
+  },
+  "overrides": {
+    "axios": "^1.18.1",
+    "joi": "^18.2.3",
+    "lodash": "^4.18.1"
   }
 }

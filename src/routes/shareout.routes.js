@@ -15,6 +15,15 @@ import { distributeShareOut } from "../services/shareout.service.js";
 
 const router = express.Router();
 
+/** Sum paid group-pool penalties in the database instead of loading them all. */
+async function getPenaltyIncome(groupId) {
+  const [row] = await Penalty.aggregate([
+    { $match: { groupId, status: "paid", fundsDestination: "group-pool" } },
+    { $group: { _id: null, total: { $sum: "$amount" } } },
+  ]);
+  return row?.total || 0;
+}
+
 /**
  * GET /api/shareout/:groupId  (auth)
  * Computes the projected share-out for the group from real member savings,
@@ -24,14 +33,10 @@ router.get(
   "/:groupId",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.groupId);
+    const group = await Group.findById(req.params.groupId).lean();
     if (!group) return res.status(404).json({ error: "Group not found" });
 
-    const penaltyIncome = await Penalty.find({
-      groupId: group._id,
-      status: "paid",
-      fundsDestination: "group-pool",
-    }).then((ps) => ps.reduce((s, p) => s + p.amount, 0));
+    const penaltyIncome = await getPenaltyIncome(group._id);
 
     const cycleMonths = group.constitution?.loanRepaymentMonths || 12;
     const profit = estimateGroupProfit(
@@ -70,10 +75,10 @@ router.post(
   "/:groupId/propose",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.groupId);
+    const group = await Group.findById(req.params.groupId).lean();
     if (!group) return res.status(404).json({ error: "Group not found" });
 
-    const existing = await Approval.findOne({
+    const existing = await Approval.exists({
       groupId: group._id,
       type: "share-out",
       status: "pending",
@@ -81,11 +86,7 @@ router.post(
     if (existing)
       return res.status(400).json({ error: "Share-out already pending" });
 
-    const penaltyIncome = await Penalty.find({
-      groupId: group._id,
-      status: "paid",
-      fundsDestination: "group-pool",
-    }).then((ps) => ps.reduce((s, p) => s + p.amount, 0));
+    const penaltyIncome = await getPenaltyIncome(group._id);
 
     const cycleMonths = group.constitution?.loanRepaymentMonths || 12;
     const profit = estimateGroupProfit(

@@ -30,7 +30,7 @@ router.get(
     const filter = {};
     if (req.query.mine === "true") filter.memberId = req.userId;
     if (req.query.groupId) filter.groupId = req.query.groupId;
-    const penalties = await Penalty.find(filter).sort({ createdAt: -1 });
+    const penalties = await Penalty.find(filter).sort({ createdAt: -1 }).lean();
     res.json({ penalties });
   })
 );
@@ -186,7 +186,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const items = await Notification.find({ userId: req.userId })
       .sort({ createdAt: -1 })
-      .limit(100);
+      .limit(100)
+      .lean();
     res.json({ notifications: items });
   })
 );
@@ -238,7 +239,8 @@ router.get(
 
     const transactions = await Transaction.find(filter)
       .sort({ date: -1 })
-      .limit(200);
+      .limit(200)
+      .lean();
     res.json({ transactions });
   })
 );
@@ -249,7 +251,9 @@ router.get(
   "/groups/:groupId/transactions",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.groupId);
+    const group = await Group.findById(req.params.groupId)
+      .select("members.userId")
+      .lean();
     if (!group) return res.status(404).json({ error: "Group not found" });
 
     const isMember = group.members.some(
@@ -269,7 +273,8 @@ router.get(
 
     const transactions = await Transaction.find(filter)
       .sort({ date: -1 })
-      .limit(500);
+      .limit(500)
+      .lean();
     res.json({ transactions });
   })
 );
@@ -281,16 +286,16 @@ router.get(
   "/reports/:groupId",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.groupId);
+    const group = await Group.findById(req.params.groupId).lean();
     if (!group) return res.status(404).json({ error: "Group not found" });
-    const loans = await Loan.find({ groupId: group._id });
+    const loans = await Loan.find({ groupId: group._id }).lean();
 
     res.json({
       groupId: group._id,
       groupName: group.name,
-      repaymentRate: getRepaymentRate(group.toObject(), loans),
-      defaults: getDefaults(group.toObject(), loans),
-      savingsGrowth: getSavingsGrowth(group.toObject()),
+      repaymentRate: getRepaymentRate(group, loans),
+      defaults: getDefaults(group, loans),
+      savingsGrowth: getSavingsGrowth(group),
       totalSavings: group.totalSavings,
       loanCirculation: group.loanCirculation,
       memberRetention: group.memberRetention ?? null,

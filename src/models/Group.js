@@ -135,5 +135,8 @@ const groupSchema = new Schema(
   { timestamps: true }
 );
 
+// "My groups" is the hottest query: Group.find({ "members.userId": ... })
+groupSchema.index({ "members.userId": 1 });
+
 export const Group = mongoose.model("Group", groupSchema);
 export default Group;

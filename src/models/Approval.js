@@ -14,7 +14,7 @@ const voteSchema = new Schema(
 
 const approvalSchema = new Schema(
   {
-    groupId: { type: Schema.Types.ObjectId, ref: "Group", required: true, index: true },
+    groupId: { type: Schema.Types.ObjectId, ref: "Group", required: true },
     groupName: { type: String },
 
     type: {
@@ -52,6 +52,9 @@ const approvalSchema = new Schema(
   },
   { timestamps: true }
 );
+
+// Pending-approval listings per group; also covers the one-pending-share-out check
+approvalSchema.index({ groupId: 1, status: 1 });
 
 // Convenience virtuals
 approvalSchema.virtual("votesFor").get(function () {

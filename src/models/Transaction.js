@@ -4,9 +4,9 @@ const { Schema } = mongoose;
 
 const transactionSchema = new Schema(
   {
-    groupId: { type: Schema.Types.ObjectId, ref: "Group", index: true },
+    groupId: { type: Schema.Types.ObjectId, ref: "Group" },
     groupName: { type: String },
-    memberId: { type: Schema.Types.ObjectId, ref: "User", index: true },
+    memberId: { type: Schema.Types.ObjectId, ref: "User" },
     memberName: { type: String },
 
     type: {
@@ -21,7 +21,6 @@ const transactionSchema = new Schema(
         "withdrawal",
       ],
       required: true,
-      index: true,
     },
     // Signed amount: positive = money in to the member, negative = money out
     amount: { type: Number, required: true },
@@ -45,7 +44,6 @@ const transactionSchema = new Schema(
       type: String,
       enum: ["pending", "completed", "failed"],
       default: "completed",
-      index: true,
     },
 
     note: { type: String },
@@ -63,6 +61,13 @@ const transactionSchema = new Schema(
   },
   { timestamps: true }
 );
+
+// Ledger listings: member history and group ledger, newest first
+transactionSchema.index({ memberId: 1, date: -1 });
+transactionSchema.index({ groupId: 1, date: -1 });
+// Webhook lookups by PawaPay id (sparse: most cash/simulated txns have none)
+transactionSchema.index({ "pawapay.depositId": 1 }, { sparse: true });
+transactionSchema.index({ "pawapay.payoutId": 1 }, { sparse: true });
 
 export const Transaction = mongoose.model("Transaction", transactionSchema);
 export default Transaction;
