@@ -3,6 +3,7 @@ import { Group } from "../models/Group.js";
 import { Transaction } from "../models/Transaction.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
+import { requireGroupMember } from "../middleware/groupAuth.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import { isGroupLocked } from "../services/logic.service.js";
 import {
@@ -12,8 +13,10 @@ import {
 
 const router = express.Router();
 
+const MAX_CONTRIBUTION = 1_000_000; // ZMW sanity cap
+
 /**
- * POST /api/contributions  (auth)
+ * POST /api/contributions  (auth, member)
  * Records a contribution. Collects from the member via PawaPay deposit.
  * Body: { groupId, amount, contributionType ("cycle"|"topup"),
  *         paymentMethod, payerPhone? }
@@ -21,16 +24,17 @@ const router = express.Router();
 router.post(
   "/",
   requireAuth,
+  requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
-    const { groupId, amount, contributionType = "cycle", paymentMethod, payerPhone } =
+    const { groupId, contributionType = "cycle", paymentMethod, payerPhone } =
       req.body;
 
-    if (!amount || amount <= 0)
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_CONTRIBUTION)
       return res.status(400).json({ error: "Enter a valid amount" });
 
-    const group = await Group.findById(groupId).lean();
-    if (!group) return res.status(404).json({ error: "Group not found" });
-    if (isGroupLocked(group))
+    const group = req.group;
+    if (isGroupLocked(group.toObject()))
       return res.status(423).json({ error: "Group is locked (fee unpaid)" });
 
     const phone = payerPhone || req.user.phone;
@@ -55,8 +59,9 @@ router.post(
     }
 
     // Update member's savings + group rollup atomically ($inc avoids the
-    // read-modify-write race when members contribute at the same time)
-    const updated = await Group.updateOne(
+    // read-modify-write race when members contribute at the same time).
+    // Membership is guaranteed by requireGroupMember.
+    await Group.updateOne(
       { _id: groupId, "members.userId": req.userId },
       {
         $inc: {
@@ -67,13 +72,6 @@ router.post(
         },
       }
     );
-    if (updated.matchedCount === 0) {
-      // Contributor has no member row; still credit the group rollups
-      await Group.updateOne(
-        { _id: groupId },
-        { $inc: { totalSavings: amount, walletBalance: amount } }
-      );
-    }
 
     const txn = await Transaction.create({
       groupId,

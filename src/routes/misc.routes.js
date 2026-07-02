@@ -6,6 +6,11 @@ import { Notification } from "../models/Notification.js";
 import { Loan } from "../models/Loan.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
+import {
+  requireGroupMember,
+  requireGroupAdmin,
+  isGroupAdmin,
+} from "../middleware/groupAuth.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import {
   computePenaltyAmount,
@@ -22,14 +27,27 @@ const router = express.Router();
 
 // ─── PENALTIES ──────────────────────────────────────────────────────────────
 
-/** GET /api/penalties?mine=true|groupId=... (auth) */
+/** GET /api/penalties?mine=true|groupId=... (auth)
+ *  Group-scoped requires membership; otherwise only the caller's own. */
 router.get(
   "/penalties",
   requireAuth,
   asyncHandler(async (req, res) => {
     const filter = {};
-    if (req.query.mine === "true") filter.memberId = req.userId;
-    if (req.query.groupId) filter.groupId = req.query.groupId;
+    if (req.query.groupId) {
+      const g = await Group.findById(String(req.query.groupId))
+        .select("members.userId members.status")
+        .lean();
+      const isMember = g?.members.some(
+        (m) => String(m.userId) === String(req.userId) && m.status === "active"
+      );
+      if (!isMember)
+        return res.status(403).json({ error: "Not a member of this group" });
+      filter.groupId = req.query.groupId;
+      if (req.query.mine === "true") filter.memberId = req.userId;
+    } else {
+      filter.memberId = req.userId;
+    }
     const penalties = await Penalty.find(filter).sort({ createdAt: -1 }).lean();
     res.json({ penalties });
   })
@@ -45,9 +63,9 @@ router.get(
 router.post(
   "/penalties/detect/:groupId",
   requireAuth,
+  requireGroupAdmin("groupId"),
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.groupId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    const group = req.group;
     const c = group.constitution;
     if (!c) return res.json({ created: [] });
 
@@ -138,6 +156,13 @@ router.post(
     if (!penalty) return res.status(404).json({ error: "Penalty not found" });
     if (penalty.status === "paid")
       return res.status(400).json({ error: "Already paid" });
+
+    // Only the penalised member (or a group admin recording it) can pay
+    if (String(penalty.memberId) !== String(req.userId)) {
+      const g = await Group.findById(penalty.groupId).lean();
+      if (!g || !isGroupAdmin(g, req.userId))
+        return res.status(403).json({ error: "Not your penalty" });
+    }
 
     const phone = req.body.payerPhone || req.user.phone;
     const deposit = await initiateDeposit({
@@ -250,18 +275,8 @@ router.get(
 router.get(
   "/groups/:groupId/transactions",
   requireAuth,
+  requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.groupId)
-      .select("members.userId")
-      .lean();
-    if (!group) return res.status(404).json({ error: "Group not found" });
-
-    const isMember = group.members.some(
-      (m) => String(m.userId) === String(req.userId)
-    );
-    if (!isMember)
-      return res.status(403).json({ error: "Not a member of this group" });
-
     const filter = { groupId: req.params.groupId };
     if (req.query.type && req.query.type !== "all") filter.type = req.query.type;
     if (req.query.range && req.query.range !== "all") {
@@ -281,13 +296,13 @@ router.get(
 
 // ─── REPORTS ────────────────────────────────────────────────────────────────
 
-/** GET /api/reports/:groupId (auth) — computed analytics for a group */
+/** GET /api/reports/:groupId (auth, member) — computed analytics for a group */
 router.get(
   "/reports/:groupId",
   requireAuth,
+  requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.groupId).lean();
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    const group = req.group.toObject();
     const loans = await Loan.find({ groupId: group._id }).lean();
 
     res.json({

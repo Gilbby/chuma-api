@@ -1,10 +1,10 @@
 import crypto from "crypto";
 
-/** Generate a numeric OTP of given length. */
+/** Generate a numeric OTP of given length (crypto-secure). */
 export function generateOtp(length = 6) {
   let code = "";
   for (let i = 0; i < length; i++) {
-    code += Math.floor(Math.random() * 10);
+    code += crypto.randomInt(0, 10);
   }
   return code;
 }
@@ -14,19 +14,32 @@ export function hashValue(value) {
   return crypto.createHash("sha256").update(String(value)).digest("hex");
 }
 
-/** Generate a 6-character uppercase invite code. */
+/** Constant-time comparison of two hex digests. */
+export function safeEqualHex(a, b) {
+  const ba = Buffer.from(String(a), "hex");
+  const bb = Buffer.from(String(b), "hex");
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+/** Generate a 6-character uppercase invite code (crypto-secure). */
 export function generateInviteCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no ambiguous chars
   let code = "";
   for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+    code += chars[crypto.randomInt(0, chars.length)];
   }
   return code;
 }
 
-/** Generate a Chuma receipt id, e.g. CHM-48213. */
+/** Generate a Chuma receipt id, e.g. CHM-8F3K2Q9D (collision-resistant). */
 export function generateReceiptId(prefix = "CHM") {
-  return `${prefix}-${Math.floor(Math.random() * 90000) + 10000}`;
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789";
+  let id = "";
+  for (let i = 0; i < 8; i++) {
+    id += chars[crypto.randomInt(0, chars.length)];
+  }
+  return `${prefix}-${id}`;
 }
 
 /** Detect Zambian mobile money network from a phone number. */
@@ -55,6 +68,7 @@ export function normalizePhone(phone) {
 export default {
   generateOtp,
   hashValue,
+  safeEqualHex,
   generateInviteCode,
   generateReceiptId,
   detectNetwork,

@@ -45,7 +45,9 @@ const approvalSchema = new Schema(
 
     status: {
       type: String,
-      enum: ["pending", "approved", "rejected"],
+      // "executed" marks approvals whose action has run (prevents double
+      // execution of share-outs and similar one-shot actions)
+      enum: ["pending", "approved", "rejected", "executed"],
       default: "pending",
       index: true,
     },

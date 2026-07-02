@@ -18,28 +18,44 @@ const router = express.Router();
  */
 
 // TODO: implement RFC-9421 signature verification for signed callbacks.
+// Until then the handlers below are defensive: they accept only known final
+// statuses and only transition transactions that are still pending, so a
+// replayed or spoofed callback can never flip a settled transaction.
+
+const FINAL_STATUSES = ["COMPLETED", "FAILED"];
+
+async function applyFinalStatus(idField, id, status, failureReason) {
+  if (!id || typeof id !== "string") return "ignored";
+  if (!FINAL_STATUSES.includes(status)) return "ignored";
+
+  const update = {
+    status: status === "COMPLETED" ? "completed" : "failed",
+    "pawapay.status": status,
+    ...(failureReason
+      ? { "pawapay.failureReason": JSON.stringify(failureReason) }
+      : {}),
+  };
+  // Atomic: only a still-pending transaction can transition (idempotent)
+  const txn = await Transaction.findOneAndUpdate(
+    { [idField]: id, status: "pending" },
+    update,
+    { new: true }
+  );
+  return txn ? "applied" : "no-op";
+}
 
 router.post(
   "/pawapay/deposit",
   express.json(),
   asyncHandler(async (req, res) => {
     const { depositId, status, failureReason } = req.body || {};
-    console.log(`[WEBHOOK] deposit ${depositId} → ${status}`);
-
-    if (depositId) {
-      const txn = await Transaction.findOne({ "pawapay.depositId": depositId });
-      if (txn) {
-        txn.pawapay.status = status;
-        if (failureReason) txn.pawapay.failureReason = JSON.stringify(failureReason);
-        txn.status =
-          status === "COMPLETED"
-            ? "completed"
-            : status === "FAILED"
-            ? "failed"
-            : txn.status;
-        await txn.save();
-      }
-    }
+    const result = await applyFinalStatus(
+      "pawapay.depositId",
+      depositId,
+      status,
+      failureReason
+    );
+    console.log(`[WEBHOOK] deposit ${depositId} → ${status} (${result})`);
     res.status(200).json({ received: true });
   })
 );
@@ -49,22 +65,13 @@ router.post(
   express.json(),
   asyncHandler(async (req, res) => {
     const { payoutId, status, failureReason } = req.body || {};
-    console.log(`[WEBHOOK] payout ${payoutId} → ${status}`);
-
-    if (payoutId) {
-      const txn = await Transaction.findOne({ "pawapay.payoutId": payoutId });
-      if (txn) {
-        txn.pawapay.status = status;
-        if (failureReason) txn.pawapay.failureReason = JSON.stringify(failureReason);
-        txn.status =
-          status === "COMPLETED"
-            ? "completed"
-            : status === "FAILED"
-            ? "failed"
-            : txn.status;
-        await txn.save();
-      }
-    }
+    const result = await applyFinalStatus(
+      "pawapay.payoutId",
+      payoutId,
+      status,
+      failureReason
+    );
+    console.log(`[WEBHOOK] payout ${payoutId} → ${status} (${result})`);
     res.status(200).json({ received: true });
   })
 );

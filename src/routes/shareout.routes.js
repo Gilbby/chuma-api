@@ -6,6 +6,10 @@ import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
 import {
+  requireGroupMember,
+  requireGroupAdmin,
+} from "../middleware/groupAuth.js";
+import {
   computeShareOut,
   estimateGroupProfit,
   getRequiredApprovals,
@@ -32,10 +36,9 @@ async function getPenaltyIncome(groupId) {
 router.get(
   "/:groupId",
   requireAuth,
+  requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.groupId).lean();
-    if (!group) return res.status(404).json({ error: "Group not found" });
-
+    const group = req.group;
     const penaltyIncome = await getPenaltyIncome(group._id);
 
     const cycleMonths = group.constitution?.loanRepaymentMonths || 12;
@@ -74,10 +77,9 @@ router.get(
 router.post(
   "/:groupId/propose",
   requireAuth,
+  requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.groupId).lean();
-    if (!group) return res.status(404).json({ error: "Group not found" });
-
+    const group = req.group;
     const existing = await Approval.exists({
       groupId: group._id,
       type: "share-out",
@@ -145,18 +147,27 @@ router.post(
 );
 
 /**
- * POST /api/shareout/:groupId/distribute  (auth, chairperson)
+ * POST /api/shareout/:groupId/distribute  (auth, admin)
  * Pays each member their share via PawaPay payout, then resets the cycle.
- * (In production, gate this behind an approved share-out approval.)
+ * Requires an APPROVED share-out approval, which is atomically consumed
+ * (marked executed) so the pot can never be distributed twice.
  */
 router.post(
   "/:groupId/distribute",
   requireAuth,
+  requireGroupAdmin("groupId"),
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.groupId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    const approval = await Approval.findOneAndUpdate(
+      { groupId: req.group._id, type: "share-out", status: "approved" },
+      { status: "executed" },
+      { new: true }
+    );
+    if (!approval)
+      return res.status(403).json({
+        error: "Share-out requires an approved proposal. Propose it and collect admin approvals first.",
+      });
 
-    const { payouts, summary } = await distributeShareOut(group);
+    const { payouts, summary } = await distributeShareOut(req.group);
 
     res.json({ message: "Share-out distributed", payouts, summary });
   })

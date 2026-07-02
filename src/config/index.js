@@ -58,4 +58,21 @@ export const config = {
     .map((s) => s.trim()),
 };
 
+// Refuse to start in production with insecure defaults — a forged JWT or an
+// open CORS policy is unrecoverable once real money is moving.
+if (config.env === "production") {
+  const fatal = [];
+  if (!process.env.JWT_SECRET) fatal.push("JWT_SECRET must be set");
+  if (config.corsOrigins.includes("*"))
+    fatal.push("CORS_ORIGINS must list explicit origins (no *)");
+  if (config.pawapay.paymentsEnabled && !config.pawapay.apiToken)
+    fatal.push("PAWAPAY_API_TOKEN must be set when PAYMENTS_ENABLED=true");
+  if (config.africasTalking.smsEnabled && !config.africasTalking.apiKey)
+    fatal.push("AT_API_KEY must be set when SMS_ENABLED=true");
+  if (fatal.length) {
+    console.error("✗ Refusing to start in production:\n  - " + fatal.join("\n  - "));
+    process.exit(1);
+  }
+}
+
 export default config;

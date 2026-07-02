@@ -10,11 +10,17 @@ import { initiatePayout, providerFromPhone } from "./pawapay.service.js";
  * contributions / totalSavings / cycleProgress) and saves the group.
  */
 export async function distributeShareOut(group) {
-  const penaltyIncome = await Penalty.find({
-    groupId: group._id,
-    status: "paid",
-    fundsDestination: "group-pool",
-  }).then((ps) => ps.reduce((s, p) => s + p.amount, 0));
+  const [penaltyRow] = await Penalty.aggregate([
+    {
+      $match: {
+        groupId: group._id,
+        status: "paid",
+        fundsDestination: "group-pool",
+      },
+    },
+    { $group: { _id: null, total: { $sum: "$amount" } } },
+  ]);
+  const penaltyIncome = penaltyRow?.total || 0;
 
   const cycleMonths = group.constitution?.loanRepaymentMonths || 12;
   const profit = estimateGroupProfit(

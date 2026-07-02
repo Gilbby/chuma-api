@@ -7,6 +7,7 @@ import { requireAuth, signToken } from "../middleware/auth.js";
 import {
   generateOtp,
   hashValue,
+  safeEqualHex,
   normalizePhone,
 } from "../utils/helpers.js";
 import { sendOtpSms } from "../services/sms.service.js";
@@ -14,6 +15,10 @@ import { getTrustScore, getTrustBand } from "../services/logic.service.js";
 import config from "../config/index.js";
 
 const router = express.Router();
+
+const OTP_MODES = ["signup", "signin"];
+const MAX_OTP_ATTEMPTS = 5;
+const MAX_OTPS_PER_PHONE_PER_HOUR = 3;
 
 /**
  * POST /api/auth/request-otp
@@ -24,9 +29,23 @@ router.post(
   "/request-otp",
   asyncHandler(async (req, res) => {
     const { phone, mode = "signup" } = req.body;
-    if (!phone) return res.status(400).json({ error: "Phone required" });
+    if (!phone || typeof phone !== "string")
+      return res.status(400).json({ error: "Phone required" });
+    if (!OTP_MODES.includes(mode))
+      return res.status(400).json({ error: "Invalid mode" });
 
     const normalized = normalizePhone(phone);
+
+    // Per-phone throttle: SMS costs money and codes shouldn't be farmable
+    const recent = await Otp.countDocuments({
+      phone: normalized,
+      createdAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) },
+    });
+    if (recent >= MAX_OTPS_PER_PHONE_PER_HOUR)
+      return res
+        .status(429)
+        .json({ error: "Too many codes requested for this number. Try again later." });
+
     const code = generateOtp(config.otp.length);
     const expiresAt = new Date(
       Date.now() + config.otp.expiryMinutes * 60 * 1000
@@ -44,8 +63,11 @@ router.post(
     res.json({
       message: "OTP sent",
       phone: normalized,
-      // In dev (SMS disabled) we return the code so you can test without SMS.
-      ...(result.simulated ? { devCode: code } : {}),
+      // Dev convenience only: never leak the code outside development,
+      // even if SMS is accidentally disabled in production.
+      ...(result.simulated && config.env === "development"
+        ? { devCode: code }
+        : {}),
     });
   })
 );
@@ -60,8 +82,10 @@ router.post(
   "/verify-otp",
   asyncHandler(async (req, res) => {
     const { phone, code, mode = "signup" } = req.body;
-    if (!phone || !code)
+    if (!phone || !code || typeof phone !== "string")
       return res.status(400).json({ error: "Phone and code required" });
+    if (!OTP_MODES.includes(mode))
+      return res.status(400).json({ error: "Invalid mode" });
 
     const normalized = normalizePhone(phone);
     const otp = await Otp.findOne({
@@ -73,19 +97,31 @@ router.post(
     if (!otp) return res.status(400).json({ error: "No OTP found, request again" });
     if (otp.expiresAt < new Date())
       return res.status(400).json({ error: "OTP expired" });
-    if (otp.codeHash !== hashValue(code))
+    if (otp.attempts >= MAX_OTP_ATTEMPTS)
+      return res
+        .status(400)
+        .json({ error: "Too many wrong attempts. Request a new code." });
+    if (!safeEqualHex(otp.codeHash, hashValue(code))) {
+      otp.attempts += 1;
+      await otp.save();
       return res.status(400).json({ error: "Incorrect code" });
+    }
 
     otp.consumed = true;
     await otp.save();
 
     let user = await User.findOne({ phone: normalized });
 
+    // Fresh OTP proves phone ownership → allow PIN (re)set for 10 minutes
+    const pinResetAllowedUntil = new Date(Date.now() + 10 * 60 * 1000);
+
     if (mode === "signin") {
       if (!user)
         return res
           .status(404)
           .json({ error: "No account for this number. Please sign up." });
+      user.pinResetAllowedUntil = pinResetAllowedUntil;
+      await user.save();
       return res.json({
         token: signToken(user._id),
         user: sanitizeUser(user),
@@ -97,6 +133,8 @@ router.post(
     if (!user) {
       user = await User.create({ name: "New member", phone: normalized });
     }
+    user.pinResetAllowedUntil = pinResetAllowedUntil;
+    await user.save();
     res.json({
       token: signToken(user._id),
       user: sanitizeUser(user),
@@ -129,16 +167,32 @@ router.post(
 
 /**
  * POST /api/auth/pin  (auth)
- * Body: { pin }
- * Sets the app PIN.
+ * Body: { pin, currentPin? }
+ * Sets the app PIN. Changing an existing PIN requires the current one, so a
+ * stolen session token alone can't take over the PIN.
  */
 router.post(
   "/pin",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const { pin } = req.body;
-    if (!pin || String(pin).length < 4)
-      return res.status(400).json({ error: "PIN must be at least 4 digits" });
+    const { pin, currentPin } = req.body;
+    if (!/^\d{4,6}$/.test(String(pin ?? "")))
+      return res.status(400).json({ error: "PIN must be 4-6 digits" });
+
+    if (req.user.pinHash) {
+      const recentlyVerifiedOtp =
+        req.user.pinResetAllowedUntil &&
+        req.user.pinResetAllowedUntil > new Date();
+      const ok =
+        recentlyVerifiedOtp ||
+        (currentPin != null &&
+          (await bcrypt.compare(String(currentPin), req.user.pinHash)));
+      if (!ok)
+        return res
+          .status(403)
+          .json({ error: "Current PIN required to change your PIN" });
+    }
+
     req.user.pinHash = await bcrypt.hash(String(pin), 10);
     await req.user.save();
     res.json({ message: "PIN set", next: "biometric" });

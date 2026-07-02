@@ -4,6 +4,7 @@ import helmet from "helmet";
 import compression from "compression";
 import morgan from "morgan";
 import rateLimit from "express-rate-limit";
+import mongoSanitize from "express-mongo-sanitize";
 
 import config from "./config/index.js";
 import { connectDB } from "./config/db.js";
@@ -20,6 +21,10 @@ import webhookRoutes from "./routes/webhook.routes.js";
 
 const app = express();
 
+// Behind a reverse proxy (Render/Railway/nginx) the client IP arrives in
+// X-Forwarded-For; without this, rate limits key on the proxy's IP.
+app.set("trust proxy", 1);
+
 app.use(helmet());
 app.use(
   cors({
@@ -30,6 +35,8 @@ app.use(
 app.use(compression());
 // Payloads are small JSON (no base64 uploads); keep the limit tight
 app.use(express.json({ limit: "100kb" }));
+// Strip $ and . operators from user input (NoSQL injection)
+app.use(mongoSanitize());
 app.use(morgan(config.env === "development" ? "dev" : "combined"));
 
 // Basic rate limiting on auth (OTP abuse protection)
@@ -39,6 +46,16 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// Tighter cap on OTP sends per IP — each one costs SMS credit
+const otpRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many OTP requests, try again later" },
+});
+app.use("/api/auth/request-otp", otpRequestLimiter);
 
 // Health check
 app.get("/", (req, res) =>

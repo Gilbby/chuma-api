@@ -8,6 +8,10 @@ import { Loan } from "../models/Loan.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
 import {
+  requireGroupMember,
+  requireGroupAdmin,
+} from "../middleware/groupAuth.js";
+import {
   generateInviteCode,
   generateReceiptId,
   normalizePhone,
@@ -62,15 +66,14 @@ router.get(
 );
 
 /**
- * GET /api/groups/:id  (auth)
+ * GET /api/groups/:id  (auth, member)
  */
 router.get(
   "/:id",
   requireAuth,
+  requireGroupMember("id"),
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.id).lean();
-    if (!group) return res.status(404).json({ error: "Group not found" });
-    res.json({ group: withFeeStatus(group) });
+    res.json({ group: withFeeStatus(req.group) });
   })
 );
 
@@ -161,19 +164,23 @@ router.post(
 );
 
 /**
- * POST /api/groups/:id/invite  (auth) — invite by phone number.
+ * POST /api/groups/:id/invite  (auth, admin) — invite by phone number.
  * Creates a pending member + invite notification + SMS.
  * Body: { phone, role? }
  */
 router.post(
   "/:id/invite",
   requireAuth,
+  requireGroupAdmin("id"),
   asyncHandler(async (req, res) => {
     const { phone, role = "Member" } = req.body;
-    const group = await Group.findById(req.params.id);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!phone || typeof phone !== "string")
+      return res.status(400).json({ error: "Phone required" });
+    const group = req.group;
 
     const normalized = normalizePhone(phone);
+    if (group.members.some((m) => m.phone === normalized && m.status !== "removed"))
+      return res.status(400).json({ error: "This number is already in the group" });
     const invited = await User.findOne({ phone: normalized });
 
     group.members.push({
@@ -235,14 +242,14 @@ router.post(
 );
 
 /**
- * GET /api/groups/:id/fee  (auth) — fee/lock status + amount owed.
+ * GET /api/groups/:id/fee  (auth, member) — fee/lock status + amount owed.
  */
 router.get(
   "/:id/fee",
   requireAuth,
+  requireGroupMember("id"),
   asyncHandler(async (req, res) => {
-    const g = await Group.findById(req.params.id).lean();
-    if (!g) return res.status(404).json({ error: "Group not found" });
+    const g = req.group.toObject();
     res.json({
       groupId: g._id,
       groupName: g.name,
@@ -256,17 +263,16 @@ router.get(
 );
 
 /**
- * POST /api/groups/:id/fee/pay  (auth) — pay outstanding monthly fee(s).
+ * POST /api/groups/:id/fee/pay  (auth, member) — pay outstanding monthly fee(s).
  * Charges via PawaPay deposit from the payer, advances feePaidThrough.
  * Body: { payerPhone? }
  */
 router.post(
   "/:id/fee/pay",
   requireAuth,
+  requireGroupMember("id"),
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.id);
-    if (!group) return res.status(404).json({ error: "Group not found" });
-
+    const group = req.group;
     const g = group.toObject();
     const months = getMonthsOwed(g);
     const amount = getAmountOwed(g);
@@ -318,16 +324,15 @@ router.post(
 );
 
 /**
- * POST /api/groups/:id/delete-request  (auth) — request group deletion.
+ * POST /api/groups/:id/delete-request  (auth, admin) — request group deletion.
  * Blocked if open loans/savings exist. Routes to admin approval.
  */
 router.post(
   "/:id/delete-request",
   requireAuth,
+  requireGroupAdmin("id"),
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.params.id);
-    if (!group) return res.status(404).json({ error: "Group not found" });
-
+    const group = req.group;
     const openLoans = await Loan.countDocuments({
       groupId: group._id,
       status: { $in: ["active", "pending", "overdue"] },

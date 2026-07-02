@@ -13,6 +13,7 @@ const otpSchema = new Schema(
     },
     expiresAt: { type: Date, required: true },
     consumed: { type: Boolean, default: false },
+    attempts: { type: Number, default: 0 }, // wrong guesses; invalidated at max
   },
   { timestamps: true }
 );

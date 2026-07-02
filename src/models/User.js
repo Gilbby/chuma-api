@@ -7,6 +7,9 @@ const userSchema = new Schema(
     name: { type: String, required: true },
     phone: { type: String, required: true, unique: true, index: true },
     pinHash: { type: String }, // hashed app PIN
+    // Set on OTP verification; allows a PIN reset shortly after proving
+    // phone ownership (so a stolen JWT alone can't change the PIN)
+    pinResetAllowedUntil: { type: Date },
     avatar: { type: String },
     joinedDate: { type: Date, default: Date.now },
 

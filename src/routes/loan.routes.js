@@ -6,6 +6,10 @@ import { Transaction } from "../models/Transaction.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
+import {
+  requireGroupMember,
+  isGroupAdmin,
+} from "../middleware/groupAuth.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import {
   getMaxLoan,
@@ -30,19 +34,15 @@ const router = express.Router();
 router.get(
   "/eligibility",
   requireAuth,
+  requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
-    const group = await Group.findById(req.query.groupId).lean();
-    if (!group) return res.status(404).json({ error: "Group not found" });
-    const member = group.members.find(
-      (m) => String(m.userId) === String(req.userId)
-    );
-    const savings = member?.savings || 0;
-    const maxLoan = getMaxLoan(savings, group.loanMaxMultiplier);
+    const savings = req.member.savings || 0;
+    const maxLoan = getMaxLoan(savings, req.group.loanMaxMultiplier);
     res.json({
       savings,
       maxLoan,
-      multiplier: group.loanMaxMultiplier,
-      interestRate: group.loanInterestRate,
+      multiplier: req.group.loanMaxMultiplier,
+      interestRate: req.group.loanInterestRate,
     });
   })
 );
@@ -55,19 +55,20 @@ router.get(
 router.post(
   "/",
   requireAuth,
+  requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
-    const { groupId, amount, durationMonths, reason } = req.body;
-    const group = await Group.findById(groupId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    const { groupId, durationMonths, reason } = req.body;
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount <= 0)
+      return res.status(400).json({ error: "Enter a valid amount" });
+
+    const group = req.group;
     if (isGroupLocked(group.toObject()))
       return res.status(423).json({ error: "Group is locked (fee unpaid)" });
     if (!group.constitution?.internalLendingEnabled)
       return res.status(400).json({ error: "Internal lending is disabled" });
 
-    const member = group.members.find(
-      (m) => String(m.userId) === String(req.userId)
-    );
-    const savings = member?.savings || 0;
+    const savings = req.member.savings || 0;
     const maxLoan = getMaxLoan(savings, group.loanMaxMultiplier);
     const elig = checkEligibility(amount, maxLoan);
     if (!elig.eligible) return res.status(400).json({ error: elig.reason });
@@ -142,11 +143,22 @@ router.post(
   "/:id/repay",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const { amount, payerPhone } = req.body;
+    const { payerPhone } = req.body;
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount <= 0)
+      return res.status(400).json({ error: "Enter a valid amount" });
+
     const loan = await Loan.findById(req.params.id);
     if (!loan) return res.status(404).json({ error: "Loan not found" });
     if (loan.status !== "active" && loan.status !== "overdue")
       return res.status(400).json({ error: "Loan is not active" });
+
+    // Only the borrower (or a group admin recording on their behalf) can repay
+    if (String(loan.memberId) !== String(req.userId)) {
+      const g = await Group.findById(loan.groupId).lean();
+      if (!g || !isGroupAdmin(g, req.userId))
+        return res.status(403).json({ error: "Not your loan" });
+    }
 
     const payAmount = Math.min(amount, loan.outstanding);
     const phone = payerPhone || req.user.phone;
@@ -199,15 +211,29 @@ router.post(
 );
 
 /**
- * GET /api/loans?groupId=...  (auth) — loans for a group (or the user).
+ * GET /api/loans?groupId=...&mine=true  (auth) — loans for a group the caller
+ * belongs to, or their own loans. Never a global listing.
  */
 router.get(
   "/",
   requireAuth,
   asyncHandler(async (req, res) => {
     const filter = {};
-    if (req.query.groupId) filter.groupId = req.query.groupId;
-    if (req.query.mine === "true") filter.memberId = req.userId;
+    if (req.query.groupId) {
+      const g = await Group.findById(String(req.query.groupId))
+        .select("members.userId members.status")
+        .lean();
+      const isMember = g?.members.some(
+        (m) => String(m.userId) === String(req.userId) && m.status === "active"
+      );
+      if (!isMember)
+        return res.status(403).json({ error: "Not a member of this group" });
+      filter.groupId = req.query.groupId;
+      if (req.query.mine === "true") filter.memberId = req.userId;
+    } else {
+      // Without a group scope, only ever return the caller's own loans
+      filter.memberId = req.userId;
+    }
     const loans = await Loan.find(filter).sort({ createdAt: -1 }).lean();
     res.json({ loans });
   })

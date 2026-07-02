@@ -6,6 +6,7 @@ import { Transaction } from "../models/Transaction.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
+import { isGroupAdmin } from "../middleware/groupAuth.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import {
   initiatePayout,
@@ -16,14 +17,27 @@ import { distributeShareOut } from "../services/shareout.service.js";
 const router = express.Router();
 
 /**
- * GET /api/approvals?groupId=...  (auth) — pending approvals.
+ * GET /api/approvals?groupId=...  (auth) — pending approvals, scoped to
+ * groups the caller belongs to (never a global listing).
  */
 router.get(
   "/",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const filter = { status: "pending" };
-    if (req.query.groupId) filter.groupId = req.query.groupId;
+    const myGroups = await Group.find({
+      members: { $elemMatch: { userId: req.userId, status: "active" } },
+    })
+      .select("_id")
+      .lean();
+    const myGroupIds = myGroups.map((g) => g._id);
+
+    const filter = { status: "pending", groupId: { $in: myGroupIds } };
+    if (req.query.groupId) {
+      const requested = String(req.query.groupId);
+      if (!myGroupIds.some((id) => String(id) === requested))
+        return res.status(403).json({ error: "Not a member of this group" });
+      filter.groupId = requested;
+    }
     const approvals = await Approval.find(filter).sort({ createdAt: -1 });
     res.json({ approvals });
   })
@@ -40,10 +54,20 @@ router.post(
   requireAuth,
   asyncHandler(async (req, res) => {
     const { decision } = req.body;
+    if (!["approve", "reject"].includes(decision))
+      return res.status(400).json({ error: "Decision must be approve or reject" });
+
     const approval = await Approval.findById(req.params.id);
     if (!approval) return res.status(404).json({ error: "Approval not found" });
     if (approval.status !== "pending")
       return res.status(400).json({ error: "Approval already resolved" });
+
+    // Only admins of the approval's group may vote
+    const group = await Group.findById(approval.groupId).lean();
+    if (!group || !isGroupAdmin(group, req.userId))
+      return res
+        .status(403)
+        .json({ error: "Only group admins can vote on approvals" });
 
     // Prevent double-voting
     if (approval.votes.some((v) => String(v.adminId) === String(req.userId)))
@@ -154,6 +178,8 @@ async function executeApproval(approval, req) {
     const group = await Group.findById(approval.groupId);
     if (!group) return null;
     const result = await distributeShareOut(group);
+    // One-shot action: mark executed so it can never distribute twice
+    approval.status = "executed";
     return {
       type: "share-out-distributed",
       groupId: approval.groupId,
