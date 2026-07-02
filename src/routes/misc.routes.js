@@ -25,6 +25,58 @@ import {
 
 const router = express.Router();
 
+/**
+ * Reconstruct a per-group savings trend from real contribution transactions.
+ * Returns the trailing `months` calendar months as a cumulative running total
+ * of contributions, matching the frontend chart shape: [{ label, value }].
+ * `value` is the raw kwacha cumulative savings for that month (the chart
+ * scales itself). New/no-history groups yield a flat zero series of the right
+ * length with correct trailing month labels — never mock data.
+ */
+async function buildSavingsTrend(groupId, months = 6) {
+  const txns = await Transaction.find({ groupId, type: "contribution" })
+    .sort({ date: 1 })
+    .lean();
+
+  const now = new Date();
+  // Trailing `months` buckets ending at the current calendar month.
+  const buckets = [];
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    buckets.push({
+      year: d.getFullYear(),
+      month: d.getMonth(),
+      label: d.toLocaleString("en-US", { month: "short" }),
+      value: 0,
+    });
+  }
+
+  const windowStart = new Date(buckets[0].year, buckets[0].month, 1);
+
+  // Contributions before the window seed the opening cumulative total so the
+  // first visible month reflects true accumulated savings, not just its own.
+  let cumulative = 0;
+  const monthlyTotals = new Map(); // "year-month" -> contributions in that month
+  for (const t of txns) {
+    const td = new Date(t.date);
+    const amt = Math.abs(t.amount || 0); // contributions are inflows
+    if (td < windowStart) {
+      cumulative += amt;
+    } else {
+      const key = `${td.getFullYear()}-${td.getMonth()}`;
+      monthlyTotals.set(key, (monthlyTotals.get(key) || 0) + amt);
+    }
+  }
+
+  // Running cumulative across the displayed window.
+  for (const b of buckets) {
+    cumulative += monthlyTotals.get(`${b.year}-${b.month}`) || 0;
+    b.value = cumulative;
+  }
+
+  return buckets.map((b) => ({ label: b.label, value: b.value }));
+}
+
 // ─── PENALTIES ──────────────────────────────────────────────────────────────
 
 /** GET /api/penalties?mine=true|groupId=... (auth)
@@ -314,7 +366,21 @@ router.get(
       totalSavings: group.totalSavings,
       loanCirculation: group.loanCirculation,
       memberRetention: group.memberRetention ?? null,
+      savingsTrend: await buildSavingsTrend(group._id, 6),
     });
+  })
+);
+
+/** GET /api/groups/:groupId/savings-trend?months=6 (auth, member) —
+ *  cumulative savings trend reconstructed from contribution transactions. */
+router.get(
+  "/groups/:groupId/savings-trend",
+  requireAuth,
+  requireGroupMember("groupId"),
+  asyncHandler(async (req, res) => {
+    const months = Math.min(Math.max(parseInt(req.query.months, 10) || 6, 1), 24);
+    const trend = await buildSavingsTrend(req.group._id, months);
+    res.json({ trend });
   })
 );
 
