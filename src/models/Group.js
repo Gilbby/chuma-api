@@ -69,6 +69,7 @@ const groupSchema = new Schema(
     cycleProgress: { type: Number, default: 0 }, // 0..1
     shareOutDate: { type: Date },
     nextContributionDate: { type: Date },
+    lastCycleReconciledAt: { type: Date }, // last cycle window processed by penalty detection
 
     // Loan rules
     loanInterestRate: { type: Number, default: 5 }, // % per month

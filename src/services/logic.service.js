@@ -159,6 +159,14 @@ export function advancePaidThrough(group, monthsPaid) {
   return base;
 }
 
+export function advanceContributionDate(date, frequency) {
+  const d = new Date(date);
+  if (frequency === "Weekly") d.setDate(d.getDate() + 7);
+  else if (frequency === "Bi-weekly") d.setDate(d.getDate() + 14);
+  else d.setMonth(d.getMonth() + 1); // Monthly (default)
+  return d;
+}
+
 // ─── TRUST SCORE (trustScore.ts) ────────────────────────────────────────────
 
 export function getTrustScore(member, penaltyCount = 0) {
@@ -257,6 +265,7 @@ export default {
   getGraceInfo,
   isGroupLocked,
   advancePaidThrough,
+  advanceContributionDate,
   getTrustScore,
   getTrustBand,
   computePenaltyAmount,
