@@ -57,7 +57,7 @@ router.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const groups = await Group.find({
-      "members.userId": req.userId,
+      members: { $elemMatch: { userId: req.userId, status: "active" } },
       status: { $ne: "closed" },
     }).lean();
     res.json({ groups: groups.map(withFeeStatus) });
