@@ -5,10 +5,12 @@ import compression from "compression";
 import morgan from "morgan";
 import rateLimit from "express-rate-limit";
 import mongoSanitize from "express-mongo-sanitize";
+import cron from "node-cron";
 
 import config from "./config/index.js";
 import { connectDB } from "./config/db.js";
 import { notFound, errorHandler } from "./middleware/error.js";
+import { runFeeLockReminders } from "./jobs/feeLockReminders.job.js";
 
 import authRoutes from "./routes/auth.routes.js";
 import groupRoutes from "./routes/group.routes.js";
@@ -85,6 +87,12 @@ app.use(errorHandler);
 
 async function start() {
   await connectDB();
+
+  // Daily at 08:00 server time: remind chairperson/treasurer of groups in the
+  // fee grace period, counting down days left before lock.
+  cron.schedule("0 8 * * *", runFeeLockReminders);
+  console.log("   Cron: fee-lock reminders scheduled (daily 08:00)");
+
   app.listen(config.port, () => {
     console.log(`\n🚀 Chuma backend running on port ${config.port}`);
     console.log(`   Env: ${config.env}`);

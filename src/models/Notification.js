@@ -17,6 +17,7 @@ const notificationSchema = new Schema(
         "repayment",
         "invite",
         "penalty",
+        "fee",
       ],
       required: true,
     },
