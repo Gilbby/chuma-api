@@ -167,6 +167,31 @@ export function advanceContributionDate(date, frequency) {
   return d;
 }
 
+/**
+ * Returns the userIds of active members who did NOT record a completed/pending
+ * "cycle" contribution within [windowStart, windowEnd]. Pure — no side effects.
+ * - Only type "contribution" with contributionType "cycle" counts (top-ups don't).
+ * - "failed" transactions don't count as paid.
+ * - Only members with status "active" and a userId are considered.
+ * `transactions` is the list of that group's transactions (already fetched by caller).
+ */
+export function findLateContributors(group, transactions, windowStart, windowEnd) {
+  const start = new Date(windowStart).getTime();
+  const end = new Date(windowEnd).getTime();
+  const paid = new Set();
+  for (const t of transactions) {
+    if (t.type !== "contribution") continue;
+    if (t.contributionType !== "cycle") continue;
+    if (t.status === "failed") continue;
+    const td = new Date(t.date).getTime();
+    if (td >= start && td <= end) paid.add(String(t.memberId));
+  }
+  return group.members
+    .filter((m) => m.status === "active" && m.userId)
+    .filter((m) => !paid.has(String(m.userId)))
+    .map((m) => String(m.userId));
+}
+
 // ─── TRUST SCORE (trustScore.ts) ────────────────────────────────────────────
 
 export function getTrustScore(member, penaltyCount = 0) {
@@ -266,6 +291,7 @@ export default {
   isGroupLocked,
   advancePaidThrough,
   advanceContributionDate,
+  findLateContributors,
   getTrustScore,
   getTrustBand,
   computePenaltyAmount,
