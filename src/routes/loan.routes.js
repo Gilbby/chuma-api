@@ -178,6 +178,12 @@ router.post(
     if (loan.outstanding <= 0) {
       loan.outstanding = 0;
       loan.status = "repaid";
+    } else if (loan.installmentsPaid < loan.totalInstallments) {
+      // Loan still outstanding and within term: advance the due date by one
+      // calendar month so an on-time loan doesn't falsely read as overdue.
+      const next = new Date(loan.nextDueDate || Date.now());
+      next.setMonth(next.getMonth() + 1);
+      loan.nextDueDate = next;
     }
     await loan.save();
 
