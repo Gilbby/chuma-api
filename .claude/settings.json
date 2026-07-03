@@ -6,7 +6,12 @@
       "Bash(node --check src/server.js)",
       "Bash(node \"C:/Users/gilbe/AppData/Local/Temp/claude/c--Users-gilbe-Documents-Work-Chum-v0-chuma-api/662282e1-323b-4a4f-bef8-0518dc4888ff/scratchpad/inspect-groups.mjs\")",
       "Bash(node \"C:/Users/gilbe/AppData/Local/Temp/claude/c--Users-gilbe-Documents-Work-Chum-v0-chuma-api/662282e1-323b-4a4f-bef8-0518dc4888ff/scratchpad/age-group.mjs\")",
-      "Bash(node \"C:/Users/gilbe/AppData/Local/Temp/claude/c--Users-gilbe-Documents-Work-Chum-v0-chuma-api/662282e1-323b-4a4f-bef8-0518dc4888ff/scratchpad/verify.mjs\")"
+      "Bash(node \"C:/Users/gilbe/AppData/Local/Temp/claude/c--Users-gilbe-Documents-Work-Chum-v0-chuma-api/662282e1-323b-4a4f-bef8-0518dc4888ff/scratchpad/verify.mjs\")",
+      "Bash(npx tsc *)",
+      "Bash(echo \"---exit:$?---\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\gilbe\\Documents\\Work\\Chum v0\\chuma\\src\\utils"
     ]
   }
 }
