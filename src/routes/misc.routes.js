@@ -22,6 +22,7 @@ import {
   initiateDeposit,
   providerFromPhone,
 } from "../services/pawapay.service.js";
+import { issuePenalty } from "../services/penalty.service.js";
 
 const router = express.Router();
 
@@ -121,35 +122,18 @@ router.post(
     const c = group.constitution;
     if (!c) return res.json({ created: [] });
 
-    const dest = c.penaltyFundsDestination || "group-pool";
     const daysLate = req.body.daysLate || 1;
     const created = [];
 
     const make = async (member, type, reason, amount) => {
-      if (amount <= 0) return;
-      const p = await Penalty.create({
-        groupId: group._id,
-        groupName: group.name,
-        memberId: member.userId,
-        memberName: member.name,
+      const p = await issuePenalty({
+        group,
+        member,
         violationType: type,
         reason,
         amount,
-        fundsDestination: dest,
       });
-      if (member.userId) {
-        await Notification.create({
-          userId: member.userId,
-          type: "penalty",
-          title: "Penalty issued",
-          body: `A ${reason.toLowerCase()} penalty of K${amount} was issued by ${group.name}.`,
-          groupId: group._id,
-          groupName: group.name,
-          penaltyAmount: amount,
-          penaltyReason: reason,
-        });
-      }
-      created.push(p);
+      if (p) created.push(p);
     };
 
     // Late contribution
