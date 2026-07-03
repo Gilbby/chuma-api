@@ -186,6 +186,7 @@ router.post(
       name: invited?.name || normalized,
       phone: normalized,
       role,
+      invitedByName: req.user.name,
       status: "pending",
     });
     await group.save();

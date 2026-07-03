@@ -153,10 +153,10 @@ router.post(
             userId: user._id,
             type: "invite",
             title: "Group invitation",
-            body: `You've been invited to join ${group.name}.`,
+            body: `${member.invitedByName || "Someone"} invited you to join ${group.name}.`,
             groupId: group._id,
             groupName: group.name,
-            invitedBy: group.name,
+            invitedBy: member.invitedByName || group.name,
           });
         }
       } catch (err) {

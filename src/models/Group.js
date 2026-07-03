@@ -14,6 +14,7 @@ const memberSchema = new Schema(
       default: "Member",
     },
     avatar: { type: String },
+    invitedByName: { type: String },
     savings: { type: Number, default: 0 }, // this member's savings in the group
     contributions: { type: Number, default: 0 }, // count of contributions made
     loanActive: { type: Number, default: 0 }, // outstanding loan amount
