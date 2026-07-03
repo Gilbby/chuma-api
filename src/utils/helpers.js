@@ -22,16 +22,6 @@ export function safeEqualHex(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
-/** Generate a 6-character uppercase invite code (crypto-secure). */
-export function generateInviteCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no ambiguous chars
-  let code = "";
-  for (let i = 0; i < 6; i++) {
-    code += chars[crypto.randomInt(0, chars.length)];
-  }
-  return code;
-}
-
 /** Generate a Chuma receipt id, e.g. CHM-8F3K2Q9D (collision-resistant). */
 export function generateReceiptId(prefix = "CHM") {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789";
@@ -69,7 +59,6 @@ export default {
   generateOtp,
   hashValue,
   safeEqualHex,
-  generateInviteCode,
   generateReceiptId,
   detectNetwork,
   normalizePhone,

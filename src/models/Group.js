@@ -117,7 +117,6 @@ const groupSchema = new Schema(
     monthlyFee: { type: Number, default: 100 },
     feeDueDay: { type: Number }, // day of month (1-28), matches creation day
     feePaidThrough: { type: Date }, // paid up to this date
-    inviteCode: { type: String, index: true }, // 6-char code
 
     // Health analytics (cached; recomputed)
     healthScore: { type: Number },

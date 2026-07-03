@@ -12,7 +12,6 @@ import {
   requireGroupAdmin,
 } from "../middleware/groupAuth.js";
 import {
-  generateInviteCode,
   generateReceiptId,
   normalizePhone,
 } from "../utils/helpers.js";
@@ -131,7 +130,6 @@ router.post(
       feeDueDay,
       // Paid through one month from now (month 1 covered)
       feePaidThrough: advancePaidThrough({ feePaidThrough: now }, 1),
-      inviteCode: generateInviteCode(),
       members: [
         {
           userId: req.userId,
@@ -208,10 +206,10 @@ router.post(
     // SMS invite
     await sendSms(
       normalized,
-      `${req.user.name} invited you to join ${group.name} on Chuma. Download the app and use code ${group.inviteCode} to join.`
+      `${req.user.name} invited you to join ${group.name} on Chuma. Download the app and sign up with this number to join.`
     );
 
-    res.json({ message: "Invite sent", inviteCode: group.inviteCode });
+    res.json({ message: "Invite sent" });
   })
 );
 
