@@ -11,6 +11,7 @@ import config from "./config/index.js";
 import { connectDB } from "./config/db.js";
 import { notFound, errorHandler } from "./middleware/error.js";
 import { runFeeLockReminders } from "./jobs/feeLockReminders.job.js";
+import { runPenaltyDetection } from "./jobs/penaltyDetection.job.js";
 
 import authRoutes from "./routes/auth.routes.js";
 import groupRoutes from "./routes/group.routes.js";
@@ -92,6 +93,11 @@ async function start() {
   // fee grace period, counting down days left before lock.
   cron.schedule("0 8 * * *", runFeeLockReminders);
   console.log("   Cron: fee-lock reminders scheduled (daily 08:00)");
+
+  // Daily at 08:15 server time (staggered after the fee-lock job): auto-detect
+  // late contributions and late loan repayments, issuing penalties idempotently.
+  cron.schedule("15 8 * * *", runPenaltyDetection);
+  console.log("   Cron: penalty detection scheduled (daily 08:15)");
 
   app.listen(config.port, () => {
     console.log(`\n🚀 Chuma backend running on port ${config.port}`);

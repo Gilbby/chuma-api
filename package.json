@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "seed": "node src/utils/seed.js",
-    "cron:fee-lock": "node src/jobs/feeLockReminders.job.js"
+    "cron:fee-lock": "node src/jobs/feeLockReminders.job.js",
+    "cron:penalty": "node src/jobs/penaltyDetection.job.js"
   },
   "keywords": [
     "village-banking",

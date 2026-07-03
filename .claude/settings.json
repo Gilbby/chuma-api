@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node --input-type=module -e ' *)"
+      "Bash(node --input-type=module -e ' *)",
+      "Bash(node --check src/jobs/penaltyDetection.job.js)",
+      "Bash(node --check src/server.js)"
     ]
   }
 }
