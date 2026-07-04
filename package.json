@@ -13,7 +13,9 @@
     "cron:reconcile": "node src/jobs/statusReconciliation.job.js",
     "test:webhook-sig": "node scripts/test-pawapay-signature.mjs",
     "check:deposit": "node scripts/check-deposit.mjs",
-    "verify:retry-payout": "node scripts/verify-retry-payout.mjs"
+    "verify:retry-payout": "node scripts/verify-retry-payout.mjs",
+    "verify:record-violation": "node scripts/verify-record-violation.mjs",
+    "verify:group-report": "node scripts/verify-group-report.mjs"
   },
   "keywords": [
     "village-banking",

@@ -16,6 +16,9 @@ import {
   computePenaltyAmount,
   getRepaymentRate,
   getDefaults,
+  getDefaultRate,
+  getLoansIssuedThisQuarter,
+  getMemberConsistency,
   getSavingsGrowth,
 } from "../services/logic.service.js";
 import {
@@ -105,6 +108,52 @@ router.get(
     }
     const penalties = await Penalty.find(filter).sort({ createdAt: -1 }).lean();
     res.json({ penalties });
+  })
+);
+
+/**
+ * POST /api/penalties  (auth, admin) — manually record a violation.
+ * For offenses the system can't detect from data (missed meetings,
+ * misconduct, …). Creates the penalty + member notification via the same
+ * issuePenalty path as automatic detection. Never deduped (no dueContext).
+ * Body: { groupId, memberId, violationType, reason, amount }
+ */
+router.post(
+  "/penalties",
+  requireAuth,
+  requireGroupAdmin("groupId"),
+  asyncHandler(async (req, res) => {
+    const group = req.group;
+    const { memberId, violationType, reason } = req.body;
+
+    const validTypes = Penalty.schema.path("violationType").enumValues;
+    if (!validTypes.includes(violationType))
+      return res.status(400).json({ error: "Invalid violation type" });
+
+    const member = group.members.find(
+      (m) => String(m.userId) === String(memberId) && m.status === "active"
+    );
+    if (!member)
+      return res.status(404).json({ error: "Member not found in this group" });
+
+    const amount = Math.round(Number(req.body.amount));
+    if (!Number.isFinite(amount) || amount <= 0)
+      return res.status(400).json({ error: "Amount must be greater than zero" });
+
+    const trimmedReason = String(reason || "").trim();
+    if (!trimmedReason)
+      return res.status(400).json({ error: "Reason is required" });
+
+    const penalty = await issuePenalty({
+      group,
+      member,
+      violationType,
+      reason: trimmedReason,
+      amount,
+      issuedBy: req.user,
+    });
+
+    res.status(201).json({ penalty });
   })
 );
 
@@ -452,12 +501,19 @@ router.get(
   asyncHandler(async (req, res) => {
     const group = req.group.toObject();
     const loans = await Loan.find({ groupId: group._id }).lean();
+    const contributions = await Transaction.find({
+      groupId: group._id,
+      type: "contribution",
+    }).lean();
 
     res.json({
       groupId: group._id,
       groupName: group.name,
       repaymentRate: getRepaymentRate(group, loans),
       defaults: getDefaults(group, loans),
+      defaultRate: getDefaultRate(loans),
+      loansIssuedThisQuarter: getLoansIssuedThisQuarter(loans),
+      memberConsistency: getMemberConsistency(group, contributions),
       savingsGrowth: getSavingsGrowth(group),
       totalSavings: group.totalSavings,
       loanCirculation: group.loanCirculation,

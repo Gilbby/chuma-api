@@ -11,10 +11,13 @@ const penaltySchema = new Schema(
 
     violationType: {
       type: String,
-      enum: ["lateContribution", "missingMeeting", "lateRepayment"],
+      enum: ["lateContribution", "missingMeeting", "lateRepayment", "other"],
       required: true,
     },
     reason: { type: String }, // human-readable
+    // Admin who manually recorded the violation (absent for auto-detected)
+    issuedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    issuedByName: { type: String },
     amount: { type: Number, required: true },
     fundsDestination: {
       type: String,

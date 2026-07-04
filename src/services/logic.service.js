@@ -257,6 +257,105 @@ export function getDefaults(group, loans) {
   }).length;
 }
 
+// ─── REPORT ANALYTICS (reports.tsx) ─────────────────────────────────────────
+
+export function getLoansIssuedThisQuarter(loans) {
+  const now = new Date();
+  const quarterStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
+  return loans.reduce(
+    (sum, l) =>
+      sum +
+      (l.history || []).reduce((s, h) => {
+        if (h.type !== "disbursement") return s;
+        const d = new Date(h.date);
+        return d >= quarterStart ? s + h.amount : s;
+      }, 0),
+    0
+  );
+}
+
+/** % of disbursed loans currently in default (overdue, or active past due
+ *  with money outstanding), to 1 decimal. */
+export function getDefaultRate(loans) {
+  const now = Date.now();
+  const disbursed = loans.filter((l) => !["pending", "rejected"].includes(l.status));
+  if (disbursed.length === 0) return 0;
+  const defaulted = disbursed.filter((l) => {
+    if (l.status === "overdue") return true;
+    if (l.status !== "active" || l.outstanding <= 0) return false;
+    const due = new Date(l.nextDueDate);
+    return !isNaN(due.getTime()) && due.getTime() < now;
+  }).length;
+  return Math.round((defaulted / disbursed.length) * 1000) / 10;
+}
+
+/**
+ * Per-member on-time contribution rate over the last completed contribution
+ * windows (up to `maxWindows`). A member is on time in a window when one of
+ * their non-failed cycle contributions falls inside it (previous due date
+ * exclusive → due date + grace period inclusive). Windows before a member
+ * joined don't count against them; members with no completed windows yet get
+ * rate: null so the UI can show "—" instead of a made-up number.
+ */
+export function getMemberConsistency(group, transactions, { maxWindows = 12, now = new Date() } = {}) {
+  const activeMembers = (group.members || []).filter(
+    (m) => m.status === "active" && m.userId
+  );
+  const base = activeMembers.map((m) => ({
+    userId: String(m.userId),
+    name: m.name,
+    contributions: m.contributions || 0,
+    rate: null,
+  }));
+
+  let due = group.nextContributionDate ? new Date(group.nextContributionDate) : null;
+  if (!due || isNaN(due.getTime())) return base;
+
+  const freqDays =
+    group.contributionFrequency === "Weekly" ? 7
+    : group.contributionFrequency === "Bi-weekly" ? 14
+    : null; // null → calendar month
+  const stepBack = (d) =>
+    freqDays
+      ? new Date(d.getTime() - freqDays * 86400000)
+      : new Date(d.getFullYear(), d.getMonth() - 1, d.getDate());
+  const graceMs = (group.constitution?.gracePeriodDays ?? 0) * 86400000;
+
+  // Walk back to the most recent due date whose grace period has elapsed,
+  // then collect completed windows back to the group's creation.
+  while (due.getTime() + graceMs > now.getTime()) due = stepBack(due);
+  const createdAt = group.createdAt ? new Date(group.createdAt).getTime() : 0;
+  const windows = [];
+  while (windows.length < maxWindows && due.getTime() >= createdAt) {
+    const prev = stepBack(due);
+    windows.push({ due: due.getTime(), start: prev.getTime(), end: due.getTime() + graceMs });
+    due = prev;
+  }
+  if (windows.length === 0) return base;
+
+  const paidByMember = new Map(); // memberId -> [payment timestamps]
+  for (const t of transactions) {
+    if (t.type !== "contribution") continue;
+    if (t.contributionType !== "cycle") continue;
+    if (t.status === "failed") continue;
+    const key = String(t.memberId);
+    if (!paidByMember.has(key)) paidByMember.set(key, []);
+    paidByMember.get(key).push(new Date(t.date).getTime());
+  }
+
+  return activeMembers.map((m, i) => {
+    // Subdocument ObjectIds encode when the member was added to the group
+    const joined = m._id?.getTimestamp ? m._id.getTimestamp().getTime() : 0;
+    const expected = windows.filter((w) => w.due >= joined);
+    if (expected.length === 0) return base[i];
+    const paid = paidByMember.get(String(m.userId)) || [];
+    const onTime = expected.filter((w) =>
+      paid.some((ts) => ts > w.start && ts <= w.end)
+    ).length;
+    return { ...base[i], rate: Math.round((onTime / expected.length) * 100) };
+  });
+}
+
 // ─── APPROVALS (approvals.ts) ───────────────────────────────────────────────
 
 export function getRequiredApprovals(threshold, adminCount) {
@@ -298,6 +397,9 @@ export default {
   getSavingsGrowth,
   getRepaymentRate,
   getDefaults,
+  getLoansIssuedThisQuarter,
+  getDefaultRate,
+  getMemberConsistency,
   getRequiredApprovals,
   countAdmins,
 };

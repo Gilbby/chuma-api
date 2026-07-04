@@ -19,6 +19,7 @@ export async function issuePenalty({
   reason,
   amount,
   dueContext,
+  issuedBy,
 }) {
   if (amount <= 0) return null;
 
@@ -42,6 +43,8 @@ export async function issuePenalty({
     amount,
     fundsDestination: group.constitution?.penaltyFundsDestination || "group-pool",
     dueContext,
+    issuedBy: issuedBy?._id,
+    issuedByName: issuedBy?.name,
   });
 
   if (member.userId) {
