@@ -45,7 +45,7 @@ export function providerFromPhone(phone) {
   const core = digits.startsWith("260") ? digits.slice(3) : digits.replace(/^0/, "");
   const prefix = core.slice(0, 2);
   if (prefix === "76" || prefix === "96") return "MTN_MOMO_ZMB";
-  if (prefix === "77" || prefix === "97") return "AIRTEL_ZMB";
+  if (prefix === "77" || prefix === "97") return "AIRTEL_OAPI_ZMB";
   if (prefix === "75" || prefix === "95") return "ZAMTEL_ZMB";
   return "MTN_MOMO_ZMB"; // sensible default; caller can override
 }
