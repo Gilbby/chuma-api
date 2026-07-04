@@ -227,6 +227,8 @@ export async function handleFailedTransaction(txn) {
         body: `The ${label} of K${amount} to ${txn.memberName || "a member"} failed at the mobile money provider. Funds were not sent — please retry.`,
         groupId: txn.groupId,
         groupName: txn.groupName,
+        // Lets the app attach a "Retry payout" action to this notification
+        transactionId: txn._id,
       });
     }
   }

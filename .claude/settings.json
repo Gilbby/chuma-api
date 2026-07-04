@@ -13,7 +13,16 @@
       "Bash(node --check src/middleware/pawapaySignature.js)",
       "Bash(node --check src/routes/webhook.routes.js)",
       "Bash(node --check src/config/index.js)",
-      "Bash(node -e \"import\\('./src/config/index.js'\\).then\\(m => { const p = m.config.pawapay; console.log\\('verifyCallbacks \\(payments off\\):', p.verifyCallbacks\\); }\\)\")"
+      "Bash(node -e \"import\\('./src/config/index.js'\\).then\\(m => { const p = m.config.pawapay; console.log\\('verifyCallbacks \\(payments off\\):', p.verifyCallbacks\\); }\\)\")",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; $p = Get-Process -Id $conn.OwningProcess; \"$\\($p.Id\\) $\\($p.ProcessName\\) started $\\($p.StartTime\\)\"; \\(Get-CimInstance Win32_Process -Filter \"ProcessId=$\\($p.Id\\)\"\\).CommandLine)",
+      "Bash(node scripts/_verify-retry.mjs)",
+      "Bash(rm -f scripts/_verify-retry.mjs)",
+      "Bash(curl -s -o /dev/null -w \"pawapay reachability: %{http_code} in %{time_total}s\\\\n\" --max-time 15 https://api.sandbox.pawapay.io/public-key/http)",
+      "Bash(node -e ' *)",
+      "Bash(node -e \"require\\('dns'\\).setServers\\(['8.8.8.8','1.1.1.1']\\); require\\('dns'\\).promises.setServers\\(['8.8.8.8','1.1.1.1']\\); import\\('./src/server.js'\\);\")",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; $p = Get-Process -Id $conn.OwningProcess; \"server PID $\\($p.Id\\) started: $\\($p.StartTime\\)\"; \"misc.routes.js edited: $\\(\\(Get-Item 'c:\\\\Users\\\\gilbe\\\\Documents\\\\Work\\\\Chum v0\\\\chuma-api\\\\src\\\\routes\\\\misc.routes.js'\\).LastWriteTime\\)\")",
+      "Bash(curl -s --max-time 4 http://localhost:5000/api/health)",
+      "PowerShell(Start-Sleep -Seconds 12; $conn = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { $p = Get-Process -Id $conn.OwningProcess; \"listening: PID $\\($p.Id\\) started $\\($p.StartTime\\)\" } else { \"port 5000: no listener yet\" })"
     ],
     "additionalDirectories": [
       "c:\\Users\\gilbe\\Documents\\Work\\Chum v0\\chuma\\src\\utils"

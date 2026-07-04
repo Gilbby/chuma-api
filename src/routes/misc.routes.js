@@ -20,6 +20,7 @@ import {
 } from "../services/logic.service.js";
 import {
   initiateDeposit,
+  initiatePayout,
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { issuePenalty } from "../services/penalty.service.js";
@@ -330,6 +331,114 @@ router.get(
       .limit(500)
       .lean();
     res.json({ transactions });
+  })
+);
+
+/**
+ * POST /api/transactions/:id/retry-payout  (auth, treasurer/chairperson)
+ * Re-send a FAILED loan-disbursement or share-out payout. Creates a fresh
+ * pending transaction (carrying the original's settlement meta) that settles
+ * through the normal webhook/cron path. One retry per failed transaction —
+ * claimed atomically so a double-tap can never send the money twice; if the
+ * retry itself fails, the NEW failed transaction can be retried in turn.
+ */
+router.post(
+  "/transactions/:id/retry-payout",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const failed = await Transaction.findById(req.params.id);
+    if (
+      !failed ||
+      !["loan", "share-out"].includes(failed.type) ||
+      !failed.pawapay?.payoutId
+    )
+      return res.status(404).json({ error: "Failed payout not found" });
+    if (failed.status !== "failed")
+      return res
+        .status(400)
+        .json({ error: "Only failed payouts can be retried" });
+
+    const group = await Group.findById(failed.groupId).lean();
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    const me = group.members.find(
+      (m) => String(m.userId) === String(req.userId) && m.status === "active"
+    );
+    if (!me || (me.role !== "Treasurer" && me.role !== "Chairperson"))
+      return res
+        .status(403)
+        .json({ error: "Only the treasurer or chairperson can retry payouts" });
+
+    // A disbursement retry only makes sense while the loan is still waiting.
+    if (failed.type === "loan" && failed.meta?.loanId) {
+      const loan = await Loan.findById(failed.meta.loanId).lean();
+      if (!loan) return res.status(404).json({ error: "Loan not found" });
+      if (loan.status !== "pending")
+        return res
+          .status(400)
+          .json({ error: `Loan is already ${loan.status} — nothing to disburse` });
+    }
+
+    const member = group.members.find(
+      (m) => String(m.userId) === String(failed.memberId)
+    );
+    if (!member?.phone)
+      return res.status(400).json({ error: "Member has no phone on record" });
+
+    // Claim the failed transaction before sending any money.
+    const claimed = await Transaction.findOneAndUpdate(
+      { _id: failed._id, status: "failed", "meta.retriedBy": { $exists: false } },
+      { "meta.retriedBy": "in-progress" },
+      { new: true }
+    );
+    if (!claimed)
+      return res.status(409).json({ error: "This payout was already retried" });
+
+    const amount = Math.abs(failed.amount);
+    const payout = await initiatePayout({
+      amount,
+      phone: member.phone,
+      provider: providerFromPhone(member.phone),
+      statementDescription:
+        failed.type === "loan" ? "Chuma loan" : "Chuma share-out",
+      metadata: failed.meta?.loanId
+        ? [{ fieldName: "loanId", fieldValue: String(failed.meta.loanId) }]
+        : [],
+    });
+    if (payout.status === "REJECTED") {
+      // Release the claim so the admin can try again later.
+      await Transaction.updateOne(
+        { _id: failed._id },
+        { $unset: { "meta.retriedBy": "" } }
+      );
+      return res
+        .status(402)
+        .json({ error: "Payout rejected", detail: payout.error });
+    }
+
+    const baseMeta = { ...(failed.meta || {}) };
+    delete baseMeta.retriedBy;
+    const retry = await Transaction.create({
+      groupId: failed.groupId,
+      groupName: failed.groupName,
+      memberId: failed.memberId,
+      memberName: failed.memberName,
+      type: failed.type,
+      amount, // positive: money in to the member
+      status: payout.simulated ? "completed" : "pending",
+      note:
+        failed.type === "loan" ? "Loan disbursed (retry)" : "Cycle share-out (retry)",
+      receiptId: generateReceiptId("CHM"),
+      pawapay: { payoutId: payout.id, status: payout.status },
+      meta: { ...baseMeta, retryOf: failed._id },
+    });
+    await Transaction.updateOne(
+      { _id: failed._id },
+      { "meta.retriedBy": retry._id }
+    );
+
+    if (retry.status === "completed") await settleCompletedTransaction(retry);
+
+    res.json({ transaction: retry });
   })
 );
 
