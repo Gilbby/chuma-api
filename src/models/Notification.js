@@ -31,6 +31,7 @@ const notificationSchema = new Schema(
     invitedBy: { type: String },
 
     // For penalty notifications
+    penaltyId: { type: Schema.Types.ObjectId, ref: "Penalty" },
     penaltyAmount: { type: Number },
     penaltyReason: { type: String },
 

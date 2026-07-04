@@ -52,6 +52,7 @@ export async function issuePenalty({
       body: `A ${reason.toLowerCase()} penalty of K${amount} was issued by ${group.name}.`,
       groupId: group._id,
       groupName: group.name,
+      penaltyId: penalty._id,
       penaltyAmount: amount,
       penaltyReason: reason,
     });
