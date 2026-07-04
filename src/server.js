@@ -37,7 +37,14 @@ app.use(
 );
 app.use(compression());
 // Payloads are small JSON (no base64 uploads); keep the limit tight
-app.use(express.json({ limit: "100kb" }));
+app.use(
+  express.json({
+    limit: "100kb",
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    }, // raw bytes for webhook signature verification
+  })
+);
 // Strip $ and . operators from user input (NoSQL injection)
 app.use(mongoSanitize());
 app.use(morgan(config.env === "development" ? "dev" : "combined"));

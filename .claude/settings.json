@@ -8,7 +8,12 @@
       "Bash(node \"C:/Users/gilbe/AppData/Local/Temp/claude/c--Users-gilbe-Documents-Work-Chum-v0-chuma-api/662282e1-323b-4a4f-bef8-0518dc4888ff/scratchpad/age-group.mjs\")",
       "Bash(node \"C:/Users/gilbe/AppData/Local/Temp/claude/c--Users-gilbe-Documents-Work-Chum-v0-chuma-api/662282e1-323b-4a4f-bef8-0518dc4888ff/scratchpad/verify.mjs\")",
       "Bash(npx tsc *)",
-      "Bash(echo \"---exit:$?---\")"
+      "Bash(echo \"---exit:$?---\")",
+      "Bash(node -e \"import\\('http-message-signatures'\\).then\\(m => { console.log\\('top:', Object.keys\\(m\\)\\); console.log\\('httpbis:', Object.keys\\(m.httpbis\\)\\); }\\)\")",
+      "Bash(node --check src/middleware/pawapaySignature.js)",
+      "Bash(node --check src/routes/webhook.routes.js)",
+      "Bash(node --check src/config/index.js)",
+      "Bash(node -e \"import\\('./src/config/index.js'\\).then\\(m => { const p = m.config.pawapay; console.log\\('verifyCallbacks \\(payments off\\):', p.verifyCallbacks\\); }\\)\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\gilbe\\Documents\\Work\\Chum v0\\chuma\\src\\utils"

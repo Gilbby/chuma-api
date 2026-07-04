@@ -38,6 +38,10 @@ export const config = {
       process.env.PAWAPAY_PAYOUT_CALLBACK_URL ||
       "http://localhost:5000/api/webhooks/pawapay/payout",
     paymentsEnabled: bool(process.env.PAYMENTS_ENABLED, false),
+    verifyCallbacks: bool(
+      process.env.PAWAPAY_VERIFY_CALLBACKS,
+      bool(process.env.PAYMENTS_ENABLED, false) // fail-safe: defaults ON whenever real payments are on
+    ),
   },
 
   kyc: {
@@ -67,6 +71,8 @@ if (config.env === "production") {
     fatal.push("CORS_ORIGINS must list explicit origins (no *)");
   if (config.pawapay.paymentsEnabled && !config.pawapay.apiToken)
     fatal.push("PAWAPAY_API_TOKEN must be set when PAYMENTS_ENABLED=true");
+  if (config.pawapay.paymentsEnabled && !config.pawapay.verifyCallbacks)
+    fatal.push("PAWAPAY_VERIFY_CALLBACKS must not be disabled when PAYMENTS_ENABLED=true");
   if (config.africasTalking.smsEnabled && !config.africasTalking.apiKey)
     fatal.push("AT_API_KEY must be set when SMS_ENABLED=true");
   if (fatal.length) {

@@ -1,6 +1,7 @@
 import express from "express";
 import { Transaction } from "../models/Transaction.js";
 import { asyncHandler } from "../middleware/error.js";
+import { verifyPawaPayCallbackMiddleware } from "../middleware/pawapaySignature.js";
 
 const router = express.Router();
 
@@ -11,16 +12,14 @@ const router = express.Router();
  *   PAWAPAY_PAYOUT_CALLBACK_URL  = https://<ngrok>/api/webhooks/pawapay/payout
  *
  * Status values: COMPLETED | FAILED. Always respond 200 quickly.
- *
- * NOTE: For production, verify the request signature (RFC-9421) using your
- * public key configured in the PawaPay dashboard before trusting the payload.
- * That verification is left as a clearly-marked TODO.
  */
 
-// TODO: implement RFC-9421 signature verification for signed callbacks.
-// Until then the handlers below are defensive: they accept only known final
-// statuses and only transition transactions that are still pending, so a
-// replayed or spoofed callback can never flip a settled transaction.
+// RFC-9421 signature verification is implemented in
+// src/middleware/pawapaySignature.js and gated by PAWAPAY_VERIFY_CALLBACKS
+// (on by default whenever PAYMENTS_ENABLED=true; off for dev/Postman).
+// The pending→final atomic transition below stays as defense-in-depth: even a
+// replayed *valid* callback only ever transitions a still-pending transaction,
+// so it remains a no-op.
 
 const FINAL_STATUSES = ["COMPLETED", "FAILED"];
 
@@ -46,6 +45,7 @@ async function applyFinalStatus(idField, id, status, failureReason) {
 
 router.post(
   "/pawapay/deposit",
+  verifyPawaPayCallbackMiddleware(),
   express.json(),
   asyncHandler(async (req, res) => {
     const { depositId, status, failureReason } = req.body || {};
@@ -62,6 +62,7 @@ router.post(
 
 router.post(
   "/pawapay/payout",
+  verifyPawaPayCallbackMiddleware(),
   express.json(),
   asyncHandler(async (req, res) => {
     const { payoutId, status, failureReason } = req.body || {};
