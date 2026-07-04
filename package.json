@@ -10,7 +10,9 @@
     "seed": "node src/utils/seed.js",
     "cron:fee-lock": "node src/jobs/feeLockReminders.job.js",
     "cron:penalty": "node src/jobs/penaltyDetection.job.js",
-    "test:webhook-sig": "node scripts/test-pawapay-signature.mjs"
+    "cron:reconcile": "node src/jobs/statusReconciliation.job.js",
+    "test:webhook-sig": "node scripts/test-pawapay-signature.mjs",
+    "check:deposit": "node scripts/check-deposit.mjs"
   },
   "keywords": [
     "village-banking",

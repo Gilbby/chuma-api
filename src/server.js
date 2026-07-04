@@ -12,6 +12,7 @@ import { connectDB } from "./config/db.js";
 import { notFound, errorHandler } from "./middleware/error.js";
 import { runFeeLockReminders } from "./jobs/feeLockReminders.job.js";
 import { runPenaltyDetection } from "./jobs/penaltyDetection.job.js";
+import { runStatusReconciliation } from "./jobs/statusReconciliation.job.js";
 
 import authRoutes from "./routes/auth.routes.js";
 import groupRoutes from "./routes/group.routes.js";
@@ -105,6 +106,11 @@ async function start() {
   // late contributions and late loan repayments, issuing penalties idempotently.
   cron.schedule("15 8 * * *", runPenaltyDetection);
   console.log("   Cron: penalty detection scheduled (daily 08:15)");
+
+  // Every 5 minutes: poll PawaPay for pending transactions whose final-status
+  // callback never arrived and apply the same atomic transition the webhook does.
+  cron.schedule("*/5 * * * *", runStatusReconciliation);
+  console.log("   Cron: status reconciliation scheduled (every 5 min)");
 
   app.listen(config.port, () => {
     console.log(`\n🚀 Chuma backend running on port ${config.port}`);
