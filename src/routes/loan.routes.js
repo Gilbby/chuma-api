@@ -24,6 +24,7 @@ import {
   initiateDeposit,
   providerFromPhone,
 } from "../services/pawapay.service.js";
+import { settleCompletedTransaction } from "../services/settlement.service.js";
 
 const router = express.Router();
 
@@ -172,33 +173,8 @@ router.post(
     if (deposit.status === "REJECTED")
       return res.status(402).json({ error: "Payment rejected" });
 
-    loan.outstanding -= payAmount;
-    loan.installmentsPaid += 1;
-    loan.history.push({ amount: payAmount, type: "repayment" });
-    if (loan.outstanding <= 0) {
-      loan.outstanding = 0;
-      loan.status = "repaid";
-    } else if (loan.installmentsPaid < loan.totalInstallments) {
-      // Loan still outstanding and within term: advance the due date by one
-      // calendar month so an on-time loan doesn't falsely read as overdue.
-      const next = new Date(loan.nextDueDate || Date.now());
-      next.setMonth(next.getMonth() + 1);
-      loan.nextDueDate = next;
-    }
-    await loan.save();
-
-    // Reduce group circulation
-    const group = await Group.findById(loan.groupId);
-    if (group) {
-      group.loanCirculation = Math.max(0, group.loanCirculation - payAmount);
-      group.walletBalance += payAmount;
-      const member = group.members.find(
-        (m) => String(m.userId) === String(loan.memberId)
-      );
-      if (member) member.loanActive = loan.outstanding;
-      await group.save();
-    }
-
+    // Loan/group state is only mutated by the settlement service once the
+    // payment reaches COMPLETED — inline below for simulated payments.
     const txn = await Transaction.create({
       groupId: loan.groupId,
       groupName: loan.groupName,
@@ -207,10 +183,17 @@ router.post(
       type: "repayment",
       amount: -payAmount,
       status: deposit.simulated ? "completed" : "pending",
-      note: loan.status === "repaid" ? "Loan fully repaid" : "Loan repayment",
+      note: "Loan repayment",
       receiptId: generateReceiptId("CHM"),
       pawapay: { depositId: deposit.id, status: deposit.status },
+      meta: { loanId: loan._id },
     });
+
+    if (txn.status === "completed") {
+      await settleCompletedTransaction(txn);
+      const settled = await Loan.findById(loan._id);
+      return res.json({ loan: settled, transaction: txn });
+    }
 
     res.json({ loan, transaction: txn });
   })

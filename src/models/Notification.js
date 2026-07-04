@@ -32,6 +32,8 @@ const notificationSchema = new Schema(
 
     // For penalty notifications
     penaltyId: { type: Schema.Types.ObjectId, ref: "Penalty" },
+    // For actionable payment notifications (e.g. cash-receipt confirmation)
+    transactionId: { type: Schema.Types.ObjectId, ref: "Transaction" },
     penaltyAmount: { type: Number },
     penaltyReason: { type: String },
 

@@ -18,6 +18,10 @@ import {
   checkDepositStatus,
   checkPayoutStatus,
 } from "../services/pawapay.service.js";
+import {
+  settleCompletedTransaction,
+  handleFailedTransaction,
+} from "../services/settlement.service.js";
 
 // Grace window: don't poll transactions initiated moments ago — their
 // callback may legitimately still be in flight.
@@ -72,7 +76,22 @@ export async function runStatusReconciliation() {
 
     if (!updated) {
       counts.noOp++;
-    } else if (status === "COMPLETED") {
+      continue;
+    }
+
+    // We won the pending→final flip: apply settlement effects exactly once,
+    // same as the webhook path. Log loudly on error; don't abort the sweep.
+    try {
+      if (status === "COMPLETED") await settleCompletedTransaction(updated);
+      else await handleFailedTransaction(updated);
+    } catch (err) {
+      console.error(
+        `[SETTLEMENT] FAILED to apply effects for txn ${updated._id} (${updated.type}, ${status}):`,
+        err
+      );
+    }
+
+    if (status === "COMPLETED") {
       counts.reconciledCompleted++;
     } else {
       counts.reconciledFailed++;

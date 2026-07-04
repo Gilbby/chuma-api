@@ -1,6 +1,7 @@
 import express from "express";
 import { Group } from "../models/Group.js";
 import { Transaction } from "../models/Transaction.js";
+import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
 import { requireGroupMember } from "../middleware/groupAuth.js";
@@ -10,6 +11,7 @@ import {
   initiateDeposit,
   providerFromPhone,
 } from "../services/pawapay.service.js";
+import { settleCompletedTransaction } from "../services/settlement.service.js";
 
 const router = express.Router();
 
@@ -38,10 +40,10 @@ router.post(
       return res.status(423).json({ error: "Group is locked (fee unpaid)" });
 
     const phone = payerPhone || req.user.phone;
+    const isCash = paymentMethod === "Cash";
     let deposit = { id: undefined, status: "ACCEPTED", simulated: true };
 
-    // Cash is recorded by an admin; no PawaPay call
-    if (paymentMethod !== "Cash") {
+    if (!isCash) {
       deposit = await initiateDeposit({
         amount,
         phone,
@@ -58,21 +60,10 @@ router.post(
           .json({ error: "Payment rejected", detail: deposit.error });
     }
 
-    // Update member's savings + group rollup atomically ($inc avoids the
-    // read-modify-write race when members contribute at the same time).
-    // Membership is guaranteed by requireGroupMember.
-    await Group.updateOne(
-      { _id: groupId, "members.userId": req.userId },
-      {
-        $inc: {
-          "members.$.savings": amount,
-          "members.$.contributions": 1,
-          totalSavings: amount,
-          walletBalance: amount,
-        },
-      }
-    );
-
+    // Balances are NOT touched here. Savings/group rollups are applied by the
+    // settlement service once the payment settles: PawaPay COMPLETED (webhook
+    // or reconciliation cron), inline below for simulated payments, or — for
+    // Cash — when the treasurer confirms receipt via POST /:id/confirm-cash.
     const txn = await Transaction.create({
       groupId,
       groupName: group.name,
@@ -82,13 +73,108 @@ router.post(
       amount: -amount, // money out of the member's wallet
       contributionType,
       paymentMethod,
-      status: deposit.simulated || paymentMethod === "Cash" ? "completed" : "pending",
+      status: !isCash && deposit.simulated ? "completed" : "pending",
       note: `${contributionType} contribution`,
       receiptId: generateReceiptId("CHM"),
-      pawapay: { depositId: deposit.id, status: deposit.status },
+      ...(isCash ? {} : { pawapay: { depositId: deposit.id, status: deposit.status } }),
     });
 
+    if (txn.status === "completed") await settleCompletedTransaction(txn);
+
+    if (isCash) {
+      // Ask the treasurer (chairperson if the group has none) to acknowledge
+      // physically receiving the cash — settlement happens on their confirm.
+      const active = group.members.filter((m) => m.status === "active" && m.userId);
+      const treasurers = active.filter((m) => m.role === "Treasurer");
+      const recipients = treasurers.length
+        ? treasurers
+        : active.filter((m) => m.role === "Chairperson");
+      for (const admin of recipients) {
+        await Notification.create({
+          userId: admin.userId,
+          type: "contribution",
+          title: "Cash contribution — confirm receipt",
+          body: `${req.user.name} recorded a K${amount} cash contribution to ${group.name}. Confirm you received the cash to credit their savings.`,
+          groupId: group._id,
+          groupName: group.name,
+          transactionId: txn._id,
+        });
+      }
+      return res.status(201).json({
+        transaction: txn,
+        message: "Recorded — awaiting treasurer confirmation of cash receipt",
+      });
+    }
+
     res.status(201).json({ transaction: txn });
+  })
+);
+
+/**
+ * POST /api/contributions/:id/confirm-cash  (auth, treasurer/chairperson)
+ * Acknowledge (or decline) physical receipt of a Cash contribution.
+ * Body: { received?: boolean }  — defaults to true.
+ * On confirm: settles the contribution and stamps the confirmer's name on it.
+ */
+router.post(
+  "/:id/confirm-cash",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const received = req.body?.received !== false;
+
+    const txn = await Transaction.findById(req.params.id);
+    if (!txn || txn.type !== "contribution" || txn.paymentMethod !== "Cash")
+      return res.status(404).json({ error: "Cash contribution not found" });
+
+    const group = await Group.findById(txn.groupId).lean();
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    const me = group.members.find(
+      (m) => String(m.userId) === String(req.userId) && m.status === "active"
+    );
+    if (!me || (me.role !== "Treasurer" && me.role !== "Chairperson"))
+      return res
+        .status(403)
+        .json({ error: "Only the treasurer or chairperson can confirm cash" });
+
+    // Same atomic pending→final guard as PawaPay settlement: double-taps and
+    // a second admin confirming concurrently become harmless no-ops.
+    const updated = await Transaction.findOneAndUpdate(
+      { _id: txn._id, status: "pending" },
+      received
+        ? {
+            status: "completed",
+            note: `${txn.note} — cash received by ${req.user.name}`,
+            "meta.cashConfirmedBy": req.userId,
+            "meta.cashConfirmedByName": req.user.name,
+          }
+        : {
+            status: "failed",
+            note: `${txn.note} — cash not received (declined by ${req.user.name})`,
+            "meta.cashConfirmedBy": req.userId,
+            "meta.cashConfirmedByName": req.user.name,
+          },
+      { new: true }
+    );
+    if (!updated)
+      return res.status(409).json({ error: "Already confirmed or declined" });
+
+    if (received) await settleCompletedTransaction(updated);
+
+    if (updated.memberId && String(updated.memberId) !== String(req.userId)) {
+      await Notification.create({
+        userId: updated.memberId,
+        type: "contribution",
+        title: received ? "Cash contribution confirmed" : "Cash contribution declined",
+        body: received
+          ? `${req.user.name} confirmed receiving your K${Math.abs(updated.amount)} cash contribution. Your savings have been updated.`
+          : `${req.user.name} declined your K${Math.abs(updated.amount)} cash contribution — the cash was not received. Please speak to your treasurer.`,
+        groupId: updated.groupId,
+        groupName: updated.groupName,
+        transactionId: updated._id,
+      });
+    }
+
+    res.json({ transaction: updated });
   })
 );
 

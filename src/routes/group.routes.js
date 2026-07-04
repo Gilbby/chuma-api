@@ -20,7 +20,6 @@ import {
   getMonthsOwed,
   getAmountOwed,
   isGroupLocked,
-  advancePaidThrough,
   advanceContributionDate,
   getRepaymentRate,
   getDefaults,
@@ -31,6 +30,7 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { sendSms } from "../services/sms.service.js";
+import { settleCompletedTransaction } from "../services/settlement.service.js";
 import config from "../config/index.js";
 
 const router = express.Router();
@@ -130,8 +130,10 @@ router.post(
       },
       monthlyFee: fee,
       feeDueDay,
-      // Paid through one month from now (month 1 covered)
-      feePaidThrough: advancePaidThrough({ feePaidThrough: now }, 1),
+      // Month 1 is only marked paid when the fee payment settles; until then
+      // the group sits at the start of its grace window (5 days — far longer
+      // than a callback takes).
+      feePaidThrough: now,
       members: [
         {
           userId: req.userId,
@@ -145,7 +147,7 @@ router.post(
     });
 
     // Record the fee transaction
-    await Transaction.create({
+    const feeTxn = await Transaction.create({
       groupId: group._id,
       groupName: group.name,
       memberId: req.userId,
@@ -157,7 +159,14 @@ router.post(
       note: "Group registration fee (month 1)",
       receiptId: generateReceiptId("CHF"),
       pawapay: { depositId: deposit.id, status: deposit.status },
+      meta: { months: 1 },
     });
+
+    if (feeTxn.status === "completed") {
+      await settleCompletedTransaction(feeTxn);
+      const settled = await Group.findById(group._id);
+      return res.status(201).json({ group: withFeeStatus(settled) });
+    }
 
     res.status(201).json({ group: withFeeStatus(group) });
   })
@@ -295,9 +304,8 @@ router.post(
         .json({ error: "Fee payment rejected", detail: deposit.error });
     }
 
-    group.feePaidThrough = advancePaidThrough(g, months);
-    await group.save();
-
+    // feePaidThrough is only advanced by the settlement service once the
+    // payment reaches COMPLETED — inline below for simulated payments.
     const txn = await Transaction.create({
       groupId: group._id,
       groupName: group.name,
@@ -309,16 +317,27 @@ router.post(
       note: `Group fee — ${months} month(s)`,
       receiptId: generateReceiptId("CHF"),
       pawapay: { depositId: deposit.id, status: deposit.status },
+      meta: { months },
     });
 
+    if (txn.status === "completed") {
+      await settleCompletedTransaction(txn);
+      const settled = await Group.findById(group._id);
+      return res.json({
+        message: "Group reactivated",
+        receipt: {
+          receiptId: txn.receiptId,
+          amount,
+          months,
+          paidThrough: settled.feePaidThrough,
+        },
+        group: withFeeStatus(settled),
+      });
+    }
+
     res.json({
-      message: "Group reactivated",
-      receipt: {
-        receiptId: txn.receiptId,
-        amount,
-        months,
-        paidThrough: group.feePaidThrough,
-      },
+      message: "Fee payment processing — confirm on your phone",
+      receipt: { receiptId: txn.receiptId, amount, months },
       group: withFeeStatus(group),
     });
   })

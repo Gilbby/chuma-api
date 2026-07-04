@@ -49,6 +49,12 @@ const transactionSchema = new Schema(
     note: { type: String },
     receiptId: { type: String, index: true },
 
+    // Settlement linkage — what the settlement service needs to apply this
+    // transaction's effects once payment completes (see settlement.service.js):
+    // penalty:{penaltyId} fee:{months} repayment/loan:{loanId}
+    // share-out:{memberSavings}
+    meta: { type: Schema.Types.Mixed },
+
     // PawaPay linkage
     pawapay: {
       depositId: { type: String },

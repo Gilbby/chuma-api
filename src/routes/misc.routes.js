@@ -23,6 +23,7 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { issuePenalty } from "../services/penalty.service.js";
+import { settleCompletedTransaction } from "../services/settlement.service.js";
 
 const router = express.Router();
 
@@ -210,18 +211,9 @@ router.post(
     if (deposit.status === "REJECTED")
       return res.status(402).json({ error: "Payment rejected" });
 
-    penalty.status = "paid";
-    await penalty.save();
-
-    // Route funds: group pool adds to walletBalance/totalSavings
-    if (penalty.fundsDestination === "group-pool") {
-      await Group.findByIdAndUpdate(penalty.groupId, {
-        $inc: { walletBalance: penalty.amount, totalSavings: penalty.amount },
-      });
-    }
-    // emergency-fund / welfare-account would be separate ledgers in production
-
-    await Transaction.create({
+    // Penalty is only marked paid (and funds routed) by the settlement
+    // service once the payment reaches COMPLETED — inline below for simulated.
+    const txn = await Transaction.create({
       groupId: penalty.groupId,
       groupName: penalty.groupName,
       memberId: req.userId,
@@ -232,9 +224,20 @@ router.post(
       note: `Penalty: ${penalty.reason}`,
       receiptId: generateReceiptId("CHM"),
       pawapay: { depositId: deposit.id, status: deposit.status },
+      meta: { penaltyId: penalty._id },
     });
 
-    res.json({ message: "Penalty paid", penalty });
+    if (txn.status === "completed") {
+      await settleCompletedTransaction(txn);
+      const paid = await Penalty.findById(penalty._id);
+      return res.json({ message: "Penalty paid", penalty: paid });
+    }
+
+    res.json({
+      message: "Penalty payment processing — confirm on your phone",
+      penalty,
+      transaction: txn,
+    });
   })
 );
 

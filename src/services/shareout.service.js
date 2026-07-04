@@ -3,6 +3,7 @@ import { Transaction } from "../models/Transaction.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import { computeShareOut, estimateGroupProfit } from "./logic.service.js";
 import { initiatePayout, providerFromPhone } from "./pawapay.service.js";
+import { settleCompletedTransaction } from "./settlement.service.js";
 
 /**
  * Pays each active member their share of the group's pool via PawaPay payout,
@@ -51,7 +52,11 @@ export async function distributeShareOut(group) {
       provider: providerFromPhone(m.phone || ""),
       statementDescription: "Chuma share-out",
     });
-    await Transaction.create({
+    // Each member's savings are only zeroed by the settlement service once
+    // THEIR payout reaches COMPLETED (the savings snapshot travels in meta).
+    // A failed payout therefore leaves that member's stake untouched for a
+    // retry, and the cycle fully resets when the last payout settles.
+    const txn = await Transaction.create({
       groupId: group._id,
       groupName: group.name,
       memberId: m.userId,
@@ -62,18 +67,11 @@ export async function distributeShareOut(group) {
       note: "Cycle share-out",
       receiptId: generateReceiptId("CHM"),
       pawapay: { payoutId: payout.id, status: payout.status },
+      meta: { memberSavings: m.savings },
     });
+    if (txn.status === "completed") await settleCompletedTransaction(txn);
     payouts.push({ member: m.name, amount: calc.share, payoutId: payout.id });
   }
-
-  // Reset cycle: zero member savings + group pool, start a new cycle
-  group.members.forEach((m) => {
-    m.savings = 0;
-    m.contributions = 0;
-  });
-  group.totalSavings = 0;
-  group.cycleProgress = 0;
-  await group.save();
 
   return { payouts, summary: result };
 }

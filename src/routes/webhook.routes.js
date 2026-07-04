@@ -2,6 +2,10 @@ import express from "express";
 import { Transaction } from "../models/Transaction.js";
 import { asyncHandler } from "../middleware/error.js";
 import { verifyPawaPayCallbackMiddleware } from "../middleware/pawapaySignature.js";
+import {
+  settleCompletedTransaction,
+  handleFailedTransaction,
+} from "../services/settlement.service.js";
 
 const router = express.Router();
 
@@ -40,7 +44,22 @@ async function applyFinalStatus(idField, id, status, failureReason) {
     update,
     { new: true }
   );
-  return txn ? "applied" : "no-op";
+  if (!txn) return "no-op";
+
+  // We won the pending→final flip, so we apply the settlement effects exactly
+  // once. Never let a settlement error fail the callback response — PawaPay
+  // retries would no-op on the flip and the effects would be lost silently;
+  // log loudly for manual repair instead.
+  try {
+    if (status === "COMPLETED") await settleCompletedTransaction(txn);
+    else await handleFailedTransaction(txn);
+  } catch (err) {
+    console.error(
+      `[SETTLEMENT] FAILED to apply effects for txn ${txn._id} (${txn.type}, ${status}):`,
+      err
+    );
+  }
+  return "applied";
 }
 
 router.post(

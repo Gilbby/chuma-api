@@ -13,6 +13,7 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { distributeShareOut } from "../services/shareout.service.js";
+import { settleCompletedTransaction } from "../services/settlement.service.js";
 
 const router = express.Router();
 
@@ -125,24 +126,10 @@ async function executeApproval(approval, req) {
       metadata: [{ fieldName: "loanId", fieldValue: String(loan._id) }],
     });
 
-    loan.status = "active";
-    loan.nextDueDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    loan.history.push({ amount: loan.principal, type: "disbursement" });
-    await loan.save();
-
-    // Update group circulation
-    const group = await Group.findById(loan.groupId);
-    if (group) {
-      group.loanCirculation += loan.principal;
-      group.walletBalance = Math.max(0, group.walletBalance - loan.principal);
-      const gm = group.members.find(
-        (m) => String(m.userId) === String(loan.memberId)
-      );
-      if (gm) gm.loanActive = loan.outstanding;
-      await group.save();
-    }
-
-    await Transaction.create({
+    // The loan stays "pending" until the payout reaches COMPLETED — the
+    // settlement service then activates it, updates group circulation and
+    // notifies the member. Inline below for simulated payouts.
+    const txn = await Transaction.create({
       groupId: loan.groupId,
       groupName: loan.groupName,
       memberId: loan.memberId,
@@ -153,6 +140,7 @@ async function executeApproval(approval, req) {
       note: "Loan disbursed",
       receiptId: generateReceiptId("CHM"),
       pawapay: { payoutId: payout.id, status: payout.status },
+      meta: { loanId: loan._id },
     });
 
     if (loan.memberId) {
@@ -160,13 +148,22 @@ async function executeApproval(approval, req) {
         userId: loan.memberId,
         type: "loan",
         title: "Loan approved",
-        body: `Your loan of K${loan.principal} has been approved and disbursed.`,
+        body: `Your loan of K${loan.principal} has been approved. The money is on its way to your wallet.`,
         groupId: loan.groupId,
         groupName: loan.groupName,
       });
     }
 
-    return { type: "loan-disbursed", loanId: loan._id, payoutId: payout.id };
+    if (txn.status === "completed") {
+      await settleCompletedTransaction(txn);
+      return { type: "loan-disbursed", loanId: loan._id, payoutId: payout.id };
+    }
+
+    return {
+      type: "loan-disbursement-initiated",
+      loanId: loan._id,
+      payoutId: payout.id,
+    };
   }
 
   if (approval.type === "group-deletion" && approval.groupId) {
