@@ -59,8 +59,13 @@ export async function runFeeLockReminders() {
       });
     }
 
-    group.lastFeeReminderSentAt = new Date();
-    await group.save();
+    // Targeted $set of only the reminder-timestamp field. A full group.save()
+    // here would persist every field at its read-time value, clobbering a
+    // concurrent settlement's atomic $inc on walletBalance/totalSavings/etc.
+    await Group.updateOne(
+      { _id: group._id },
+      { $set: { lastFeeReminderSentAt: new Date() } }
+    );
     remindedCount++;
   }
 
