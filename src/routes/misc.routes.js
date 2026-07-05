@@ -448,7 +448,7 @@ router.post(
       phone: member.phone,
       provider: providerFromPhone(member.phone),
       statementDescription:
-        failed.type === "loan" ? "Chuma loan" : "Chuma share-out",
+        failed.type === "loan" ? "Chuma loan" : "Chuma share out",
       metadata: failed.meta?.loanId
         ? [{ fieldName: "loanId", fieldValue: String(failed.meta.loanId) }]
         : [],

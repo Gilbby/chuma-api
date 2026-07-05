@@ -11,9 +11,17 @@ const router = express.Router();
 
 /**
  * PawaPay sends the FINAL status of deposits/payouts here.
- * Configure these URLs (your ngrok https URL + these paths) in your .env:
- *   PAWAPAY_DEPOSIT_CALLBACK_URL = https://<ngrok>/api/webhooks/pawapay/deposit
- *   PAWAPAY_PAYOUT_CALLBACK_URL  = https://<ngrok>/api/webhooks/pawapay/payout
+ *
+ * Callback URLs are configured ONLY in the PawaPay Dashboard (per environment,
+ * under Callback URLs) — the API has no per-request callback field in v1 or v2,
+ * and the PAWAPAY_*_CALLBACK_URL .env vars are informational, not sent anywhere.
+ * Point the Dashboard at:
+ *   https://<public-base>/api/webhooks/pawapay/deposit
+ *   https://<public-base>/api/webhooks/pawapay/payout
+ *
+ * To re-test delivery against an existing transaction:
+ *   POST {PAWAPAY_BASE_URL}/deposits/resend-callback {"depositId": "..."}
+ *   POST {PAWAPAY_BASE_URL}/payouts/resend-callback  {"payoutId": "..."}
  *
  * Status values: COMPLETED | FAILED. Always respond 200 quickly.
  */

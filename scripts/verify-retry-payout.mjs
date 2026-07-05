@@ -87,8 +87,13 @@ try {
 
   if (retryOk) {
     const res2 = await fetch(`${API}/api/transactions/${failedId}/retry-payout`, { method: "POST", headers: H });
-    console.log(`second retry: ${res2.status}`);
-    check("second retry rejected 409", res2.status === 409);
+    const body2 = await res2.json().catch(() => ({}));
+    console.log(`second retry: ${res2.status} ${JSON.stringify(body2).slice(0, 100)}`);
+    // 409 = atomic already-retried claim. 400 = the first retry's payout
+    // already settled and activated the loan before this call — normal now
+    // that callbacks land in ~1s. Either way the double-spend was refused.
+    check("second retry rejected (409 already-retried / 400 already-settled)",
+      res2.status === 409 || (res2.status === 400 && /already/i.test(body2?.error || "")));
 
     const t0 = Date.now();
     while (Date.now() - t0 < 8.5 * 60 * 1000) {

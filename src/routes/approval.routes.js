@@ -13,7 +13,10 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { distributeShareOut } from "../services/shareout.service.js";
-import { settleCompletedTransaction } from "../services/settlement.service.js";
+import {
+  settleCompletedTransaction,
+  handleFailedTransaction,
+} from "../services/settlement.service.js";
 
 const router = express.Router();
 
@@ -129,6 +132,11 @@ async function executeApproval(approval, req) {
     // The loan stays "pending" until the payout reaches COMPLETED — the
     // settlement service then activates it, updates group circulation and
     // notifies the member. Inline below for simulated payouts.
+    //
+    // A payout REJECTED at initiation never reaches PawaPay, so no callback
+    // or reconciliation will ever finalise it — record it failed immediately
+    // (retryable via retry-payout) and notify member + admins like any failure.
+    const rejected = payout.status === "REJECTED";
     const txn = await Transaction.create({
       groupId: loan.groupId,
       groupName: loan.groupName,
@@ -136,12 +144,21 @@ async function executeApproval(approval, req) {
       memberName: loan.memberName,
       type: "loan",
       amount: loan.principal, // money in to the member
-      status: payout.simulated ? "completed" : "pending",
+      status: rejected ? "failed" : payout.simulated ? "completed" : "pending",
       note: "Loan disbursed",
       receiptId: generateReceiptId("CHM"),
-      pawapay: { payoutId: payout.id, status: payout.status },
+      pawapay: {
+        payoutId: payout.id,
+        status: payout.status,
+        ...(rejected ? { failureReason: JSON.stringify(payout.error) } : {}),
+      },
       meta: { loanId: loan._id },
     });
+
+    if (rejected) {
+      await handleFailedTransaction(txn);
+      return { type: "loan-disbursement-rejected", loanId: loan._id, payoutId: payout.id };
+    }
 
     if (loan.memberId) {
       await Notification.create({

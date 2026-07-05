@@ -14,6 +14,9 @@
     "test:webhook-sig": "node scripts/test-pawapay-signature.mjs",
     "check:deposit": "node scripts/check-deposit.mjs",
     "verify:retry-payout": "node scripts/verify-retry-payout.mjs",
+    "verify:failed-payout": "node scripts/verify-failed-payout.mjs",
+    "verify:shareout": "node scripts/verify-shareout-success.mjs",
+    "verify:settlement-race": "node scripts/verify-settlement-race.mjs",
     "verify:record-violation": "node scripts/verify-record-violation.mjs",
     "verify:group-report": "node scripts/verify-group-report.mjs"
   },

@@ -58,7 +58,14 @@ export async function verifySignedCallback(message, keyLookup) {
   // 2. Signature: the library throws on malformed input / unknown key and
   //    returns falsy on a bad signature — either way it's a failure.
   try {
-    const valid = await httpbis.verifyMessage({ keyLookup }, message);
+    // tolerance: the library defaults to 0 clock-skew tolerance and rejects
+    // any signature whose `created` is even 1s ahead of our clock. PawaPay
+    // signs at send time and sandbox callbacks arrive sub-second, so a
+    // fractionally-behind local clock 401s genuine callbacks (observed live:
+    // created 23:16:19.1Z vs server 23:16:18.9). 300s covers realistic skew;
+    // replay of a valid callback is already harmless (atomic pending→final
+    // flip in the webhook route).
+    const valid = await httpbis.verifyMessage({ keyLookup, tolerance: 300 }, message);
     if (!valid) return { ok: false, reason: "signature-invalid" };
   } catch {
     return { ok: false, reason: "signature-invalid" };

@@ -47,12 +47,16 @@ export async function settleCompletedTransaction(txn) {
     }
 
     case "penalty": {
+      // Atomic claim (status → paid): two payment transactions for the same
+      // penalty settling concurrently must credit the pool exactly once — a
+      // read-check-save here lets both pass the "already paid" check.
       const penalty = txn.meta?.penaltyId
-        ? await Penalty.findById(txn.meta.penaltyId)
+        ? await Penalty.findOneAndUpdate(
+            { _id: txn.meta.penaltyId, status: { $ne: "paid" } },
+            { status: "paid" }
+          )
         : null;
-      if (!penalty || penalty.status === "paid") return; // already settled
-      penalty.status = "paid";
-      await penalty.save();
+      if (!penalty) return; // missing or already settled
       // Route funds: group pool adds to walletBalance/totalSavings
       if (penalty.fundsDestination === "group-pool") {
         await Group.findByIdAndUpdate(txn.groupId, {
@@ -64,65 +68,119 @@ export async function settleCompletedTransaction(txn) {
 
     case "fee": {
       const months = Number(txn.meta?.months) || 1;
-      const group = await Group.findById(txn.groupId);
-      if (!group) return;
-      group.feePaidThrough = advancePaidThrough(group, months);
-      await group.save();
+      // CAS loop: feePaidThrough is date arithmetic on its own current value,
+      // so guard the write on the value we read — otherwise a concurrent fee
+      // settlement overwrites ours and paid months are silently lost.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const group = await Group.findById(txn.groupId)
+          .select("feePaidThrough")
+          .lean();
+        if (!group) return;
+        const { modifiedCount } = await Group.updateOne(
+          { _id: txn.groupId, feePaidThrough: group.feePaidThrough ?? null },
+          { $set: { feePaidThrough: advancePaidThrough(group, months) } }
+        );
+        if (modifiedCount) return;
+      }
+      console.error(
+        `[SETTLEMENT] fee CAS exhausted for group ${txn.groupId} (txn ${txn._id})`
+      );
       return;
     }
 
     case "repayment": {
-      const loan = txn.meta?.loanId ? await Loan.findById(txn.meta.loanId) : null;
-      if (!loan) return;
-      // Clamp again at settlement: another repayment may have settled first
-      const payAmount = Math.min(Math.abs(txn.amount), loan.outstanding);
-      if (payAmount <= 0) return;
-      loan.outstanding -= payAmount;
-      loan.installmentsPaid += 1;
-      loan.history.push({ amount: payAmount, type: "repayment" });
+      if (!txn.meta?.loanId) return;
+      // CAS on outstanding: clamp against the balance we read, and only apply
+      // if it hasn't moved — two repayments settling concurrently must never
+      // double-advance the due date or push the balance below zero.
+      let loan = null;
+      let payAmount = 0;
+      for (let attempt = 0; attempt < 5 && !loan; attempt++) {
+        const current = await Loan.findById(txn.meta.loanId).lean();
+        if (!current) return;
+        payAmount = Math.min(Math.abs(txn.amount), current.outstanding);
+        if (payAmount <= 0) return;
+        loan = await Loan.findOneAndUpdate(
+          { _id: current._id, outstanding: current.outstanding },
+          {
+            $inc: { outstanding: -payAmount, installmentsPaid: 1 },
+            $push: { history: { amount: payAmount, type: "repayment" } },
+          },
+          { new: true }
+        );
+      }
+      if (!loan) {
+        console.error(
+          `[SETTLEMENT] repayment CAS exhausted for loan ${txn.meta.loanId} (txn ${txn._id})`
+        );
+        return;
+      }
       if (loan.outstanding <= 0) {
+        await Loan.updateOne(
+          { _id: loan._id },
+          { $set: { outstanding: 0, status: "repaid" } }
+        );
         loan.outstanding = 0;
-        loan.status = "repaid";
       } else if (loan.installmentsPaid < loan.totalInstallments) {
         // Still outstanding and within term: advance the due date one month
         const next = new Date(loan.nextDueDate || Date.now());
         next.setMonth(next.getMonth() + 1);
-        loan.nextDueDate = next;
+        await Loan.updateOne({ _id: loan._id }, { $set: { nextDueDate: next } });
       }
-      await loan.save();
 
-      const group = await Group.findById(loan.groupId);
-      if (group) {
-        group.loanCirculation = Math.max(0, group.loanCirculation - payAmount);
-        group.walletBalance += payAmount;
-        const member = group.members.find(
-          (m) => String(m.userId) === String(loan.memberId)
-        );
-        if (member) member.loanActive = loan.outstanding;
-        await group.save();
-      }
+      // Atomic $inc/$set on the group: a full-document save() here writes a
+      // stale absolute walletBalance over any concurrent settlement's $inc.
+      await Group.updateOne(
+        { _id: loan.groupId },
+        {
+          $inc: { loanCirculation: -payAmount, walletBalance: payAmount },
+          ...(loan.memberId
+            ? { $set: { "members.$[m].loanActive": loan.outstanding } }
+            : {}),
+        },
+        loan.memberId ? { arrayFilters: [{ "m.userId": loan.memberId }] } : {}
+      );
+      await Group.updateOne(
+        { _id: loan.groupId, loanCirculation: { $lt: 0 } },
+        { $set: { loanCirculation: 0 } }
+      );
       return;
     }
 
     case "loan": {
       // Disbursement payout completed: the member has the money — activate.
-      const loan = txn.meta?.loanId ? await Loan.findById(txn.meta.loanId) : null;
-      if (!loan || loan.status === "active") return;
-      loan.status = "active";
-      loan.nextDueDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-      loan.history.push({ amount: loan.principal, type: "disbursement" });
-      await loan.save();
+      // Atomic claim on the pending status: a duplicate settlement must not
+      // double-apply the circulation/wallet effects.
+      const loan = txn.meta?.loanId
+        ? await Loan.findOneAndUpdate(
+            { _id: txn.meta.loanId, status: "pending" },
+            {
+              status: "active",
+              nextDueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            },
+            { new: true }
+          )
+        : null;
+      if (!loan) return; // missing, already active, or otherwise not disbursable
+      await Loan.updateOne(
+        { _id: loan._id },
+        { $push: { history: { amount: loan.principal, type: "disbursement" } } }
+      );
 
-      const group = await Group.findById(loan.groupId);
-      if (group) {
-        group.loanCirculation += loan.principal;
-        group.walletBalance = Math.max(0, group.walletBalance - loan.principal);
-        const gm = group.members.find(
-          (m) => String(m.userId) === String(loan.memberId)
-        );
-        if (gm) gm.loanActive = loan.outstanding;
-        await group.save();
-      }
+      await Group.updateOne(
+        { _id: loan.groupId },
+        {
+          $inc: { loanCirculation: loan.principal, walletBalance: -loan.principal },
+          ...(loan.memberId
+            ? { $set: { "members.$[m].loanActive": loan.outstanding } }
+            : {}),
+        },
+        loan.memberId ? { arrayFilters: [{ "m.userId": loan.memberId }] } : {}
+      );
+      await Group.updateOne(
+        { _id: loan.groupId, walletBalance: { $lt: 0 } },
+        { $set: { walletBalance: 0 } }
+      );
 
       if (loan.memberId) {
         await Notification.create({
@@ -139,26 +197,41 @@ export async function settleCompletedTransaction(txn) {
 
     case "share-out": {
       // This member's payout landed: retire their stake from the cycle.
+      // Atomic $set/$inc, NOT read-modify-write .save(): several share-out
+      // callbacks settle near-simultaneously and each would clobber the
+      // others' rollup decrements and see stale member savings, leaving the
+      // cycle permanently open (same race the contribution case avoids).
       const snapshot = Math.max(0, Number(txn.meta?.memberSavings) || 0);
-      const group = await Group.findById(txn.groupId);
-      if (!group) return;
-      const member = group.members.find(
-        (m) => String(m.userId) === String(txn.memberId)
+      const share = Math.abs(txn.amount); // savings + profit portion paid out
+      await Group.updateOne(
+        { _id: txn.groupId },
+        {
+          ...(txn.memberId
+            ? { $set: { "members.$[m].savings": 0, "members.$[m].contributions": 0 } }
+            : {}),
+          // The share left the group's wallet when the payout completed —
+          // without this the wallet overstates cash on hand.
+          $inc: { totalSavings: -snapshot, walletBalance: -share },
+        },
+        txn.memberId ? { arrayFilters: [{ "m.userId": txn.memberId }] } : {}
       );
-      if (member) {
-        member.savings = 0;
-        member.contributions = 0;
-      }
-      group.totalSavings = Math.max(0, group.totalSavings - snapshot);
-      // Once every active member's stake is retired, the cycle is over.
+
+      // Once every active member's stake is retired, the cycle is over; the
+      // closing $set also normalises any drift the $inc left below zero.
+      const group = await Group.findById(txn.groupId).lean();
+      if (!group) return;
       const anyLeft = group.members.some(
         (m) => m.status === "active" && m.savings > 0
       );
+      const fix = {};
+      if (group.totalSavings < 0) fix.totalSavings = 0;
+      if (group.walletBalance < 0) fix.walletBalance = 0;
       if (!anyLeft) {
-        group.totalSavings = 0;
-        group.cycleProgress = 0;
+        fix.totalSavings = 0;
+        fix.cycleProgress = 0;
       }
-      await group.save();
+      if (Object.keys(fix).length)
+        await Group.updateOne({ _id: group._id }, { $set: fix });
       return;
     }
 

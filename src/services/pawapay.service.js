@@ -50,6 +50,20 @@ export function providerFromPhone(phone) {
   return "MTN_MOMO_ZMB"; // sensible default; caller can override
 }
 
+/**
+ * PawaPay statement descriptions must be 4-22 chars, alphanumeric and spaces
+ * ONLY — anything else (e.g. a hyphen) gets the whole payment REJECTED with
+ * PARAMETER_INVALID. Sanitise centrally so no call site can slip one through.
+ */
+function toStatementDescription(text, fallback) {
+  const clean = String(text ?? "")
+    .replace(/[^a-zA-Z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 22);
+  return clean.length >= 4 ? clean : fallback;
+}
+
 /** Normalise phone to MSISDN (260XXXXXXXXX, no plus). */
 export function toMsisdn(phone) {
   const digits = String(phone).replace(/\D/g, "");
@@ -87,7 +101,7 @@ export async function initiateDeposit({
     correspondent,
     payer: { type: "MSISDN", address: { value: msisdn } },
     customerTimestamp: new Date().toISOString(),
-    statementDescription: statementDescription.slice(0, 22),
+    statementDescription: toStatementDescription(statementDescription, "Chuma payment"),
     country: config.rules.country,
     metadata,
   };
@@ -130,7 +144,7 @@ export async function initiatePayout({
     correspondent,
     recipient: { type: "MSISDN", address: { value: msisdn } },
     customerTimestamp: new Date().toISOString(),
-    statementDescription: statementDescription.slice(0, 22),
+    statementDescription: toStatementDescription(statementDescription, "Chuma payout"),
     country: config.rules.country,
     metadata,
   };

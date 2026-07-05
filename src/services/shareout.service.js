@@ -3,7 +3,10 @@ import { Transaction } from "../models/Transaction.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import { computeShareOut, estimateGroupProfit } from "./logic.service.js";
 import { initiatePayout, providerFromPhone } from "./pawapay.service.js";
-import { settleCompletedTransaction } from "./settlement.service.js";
+import {
+  settleCompletedTransaction,
+  handleFailedTransaction,
+} from "./settlement.service.js";
 
 /**
  * Pays each active member their share of the group's pool via PawaPay payout,
@@ -50,12 +53,17 @@ export async function distributeShareOut(group) {
       amount: calc.share,
       phone: m.phone,
       provider: providerFromPhone(m.phone || ""),
-      statementDescription: "Chuma share-out",
+      statementDescription: "Chuma share out",
     });
     // Each member's savings are only zeroed by the settlement service once
     // THEIR payout reaches COMPLETED (the savings snapshot travels in meta).
     // A failed payout therefore leaves that member's stake untouched for a
     // retry, and the cycle fully resets when the last payout settles.
+    //
+    // A payout REJECTED at initiation never reaches PawaPay, so no callback
+    // or reconciliation will ever finalise it — record it failed immediately
+    // (making it retryable via retry-payout) and notify like any failure.
+    const rejected = payout.status === "REJECTED";
     const txn = await Transaction.create({
       groupId: group._id,
       groupName: group.name,
@@ -63,13 +71,18 @@ export async function distributeShareOut(group) {
       memberName: m.name,
       type: "share-out",
       amount: calc.share,
-      status: payout.simulated ? "completed" : "pending",
+      status: rejected ? "failed" : payout.simulated ? "completed" : "pending",
       note: "Cycle share-out",
       receiptId: generateReceiptId("CHM"),
-      pawapay: { payoutId: payout.id, status: payout.status },
+      pawapay: {
+        payoutId: payout.id,
+        status: payout.status,
+        ...(rejected ? { failureReason: JSON.stringify(payout.error) } : {}),
+      },
       meta: { memberSavings: m.savings },
     });
     if (txn.status === "completed") await settleCompletedTransaction(txn);
+    else if (rejected) await handleFailedTransaction(txn);
     payouts.push({ member: m.name, amount: calc.share, payoutId: payout.id });
   }
 
