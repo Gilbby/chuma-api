@@ -66,9 +66,44 @@ export async function sendSms(to, message) {
 
   try {
     const raw = await client.send(options);
-    return { sent: true, raw };
+
+    // AfricasTalking returns HTTP 200 even when a per-recipient status is a
+    // failure (InvalidPhoneNumber, InsufficientBalance, UserInBlacklist, ...),
+    // so a non-throwing response does NOT mean the message went out. Inspect
+    // each recipient's status before reporting success.
+    const recipients = raw?.SMSMessageData?.Recipients ?? [];
+    const isSuccess = (r) =>
+      r?.status === "Success" ||
+      r?.statusCode === 100 ||
+      r?.statusCode === 101;
+
+    for (const r of recipients) {
+      console.log(
+        `[SMS] recipient ${r?.number} status=${r?.status} code=${r?.statusCode} cost=${r?.cost}`
+      );
+    }
+
+    const delivered = recipients.filter(isSuccess).length;
+    const total = recipients.length;
+
+    if (total > 0 && delivered === total) {
+      return { sent: true, raw, recipients };
+    }
+
+    const failures = recipients
+      .filter((r) => !isSuccess(r))
+      .map((r) => `${r?.number} (${r?.status})`)
+      .join(", ");
+    console.warn(
+      `[SMS] NOT SENT — ${delivered}/${total} recipients succeeded. ` +
+        `Failed: ${failures || "(no recipients returned)"}`
+    );
+    return { sent: false, raw, recipients };
   } catch (err) {
-    console.error("[SMS] send error:", err?.message || err);
+    console.error(
+      `[SMS] SEND FAILED — message NOT delivered to ${recipients.join(", ")}:`,
+      err?.message || err
+    );
     return { sent: false, error: err?.message };
   }
 }
