@@ -205,15 +205,28 @@ router.post(
       return res.status(400).json({ error: "This number is already in the group" });
     const invited = await User.findOne({ phone: normalized });
 
-    group.members.push({
-      userId: invited?._id,
-      name: invited?.name || normalized,
-      phone: normalized,
-      role,
-      invitedByName: req.user.name,
-      status: "pending",
-    });
-    await group.save();
+    const result = await Group.updateOne(
+      {
+        _id: group._id,
+        members: {
+          $not: { $elemMatch: { phone: normalized, status: { $ne: "removed" } } },
+        },
+      },
+      {
+        $push: {
+          members: {
+            userId: invited?._id,
+            name: invited?.name || normalized,
+            phone: normalized,
+            role,
+            invitedByName: req.user.name,
+            status: "pending",
+          },
+        },
+      }
+    );
+    if (result.matchedCount === 0)
+      return res.status(400).json({ error: "This number is already in the group" });
 
     // Notification (if the invitee already has an account)
     if (invited) {
@@ -259,10 +272,20 @@ router.post(
     if (!member)
       return res.status(404).json({ error: "No invite found for you" });
 
+    await Group.updateOne(
+      { _id: group._id, members: { $elemMatch: { _id: member._id, status: "pending" } } },
+      {
+        $set: {
+          "members.$.status": "active",
+          "members.$.userId": req.userId,
+          "members.$.name": req.user.name,
+        },
+      }
+    );
+    // Reflect in the in-memory doc for the response payload only (not persisted).
     member.status = "active";
     member.userId = req.userId;
     member.name = req.user.name;
-    await group.save();
     res.json({ message: "Joined group", group: withFeeStatus(group) });
   })
 );
@@ -401,8 +424,10 @@ router.post(
       requiredApprovals: 2,
     });
 
-    group.status = "deletion-pending";
-    await group.save();
+    await Group.updateOne(
+      { _id: group._id },
+      { $set: { status: "deletion-pending" } }
+    );
     res.json({ message: "Deletion requested, pending admin approval", approval });
   })
 );
