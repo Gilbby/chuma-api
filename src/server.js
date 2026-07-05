@@ -106,7 +106,7 @@ async function start() {
   console.log("   Cron: status reconciliation scheduled (every 5 min)");
 
   app.listen(config.port, () => {
-    console.log(`\n🚀 Chuma backend running on port ${config.port}`);
+    console.log(`\n Chuma backend running on port ${config.port}`);
     console.log(`   Env: ${config.env}`);
     console.log(
       `   Payments: ${config.pawapay.paymentsEnabled ? "LIVE (PawaPay)" : "SIMULATED"}`
