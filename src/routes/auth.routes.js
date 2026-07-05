@@ -146,8 +146,16 @@ router.post(
             (m) => m.phone === normalized && m.status === "pending"
           );
           if (member) {
-            member.userId = user._id; // keep status "pending" — they still accept
-            await group.save();
+            // Targeted positional $set of only this member's userId (status stays
+            // "pending" — they still accept in-app). A full group.save() here would
+            // persist read-time values and clobber a concurrent settlement $inc.
+            await Group.updateOne(
+              {
+                _id: group._id,
+                members: { $elemMatch: { phone: normalized, status: "pending" } },
+              },
+              { $set: { "members.$.userId": user._id } }
+            );
           }
           await Notification.create({
             userId: user._id,
