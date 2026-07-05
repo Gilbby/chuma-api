@@ -252,6 +252,23 @@ router.post(
     }
 
     const phone = req.body.payerPhone || req.user.phone;
+
+    // Validate the full transaction against the model BEFORE initiating the
+    // deposit — PawaPay must never move money for a request we would reject.
+    const txn = new Transaction({
+      groupId: penalty.groupId,
+      groupName: penalty.groupName,
+      memberId: req.userId,
+      memberName: req.user.name,
+      type: "penalty",
+      amount: -penalty.amount,
+      status: "pending",
+      note: `Penalty: ${penalty.reason}`,
+      receiptId: generateReceiptId("CHM"),
+      meta: { penaltyId: penalty._id },
+    });
+    await txn.validate(); // ValidationError → 400 via the error middleware
+
     const deposit = await initiateDeposit({
       amount: penalty.amount,
       phone,
@@ -263,19 +280,9 @@ router.post(
 
     // Penalty is only marked paid (and funds routed) by the settlement
     // service once the payment reaches COMPLETED — inline below for simulated.
-    const txn = await Transaction.create({
-      groupId: penalty.groupId,
-      groupName: penalty.groupName,
-      memberId: req.userId,
-      memberName: req.user.name,
-      type: "penalty",
-      amount: -penalty.amount,
-      status: deposit.simulated ? "completed" : "pending",
-      note: `Penalty: ${penalty.reason}`,
-      receiptId: generateReceiptId("CHM"),
-      pawapay: { depositId: deposit.id, status: deposit.status },
-      meta: { penaltyId: penalty._id },
-    });
+    txn.pawapay = { depositId: deposit.id, status: deposit.status };
+    if (deposit.simulated) txn.status = "completed";
+    await txn.save();
 
     if (txn.status === "completed") {
       await settleCompletedTransaction(txn);

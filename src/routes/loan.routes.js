@@ -162,7 +162,26 @@ router.post(
     }
 
     const payAmount = Math.min(amount, loan.outstanding);
+    if (!(payAmount > 0))
+      return res.status(400).json({ error: "Nothing outstanding on this loan" });
     const phone = payerPhone || req.user.phone;
+
+    // Validate the full transaction against the model BEFORE initiating the
+    // deposit — PawaPay must never move money for a request we would reject.
+    const txn = new Transaction({
+      groupId: loan.groupId,
+      groupName: loan.groupName,
+      memberId: req.userId,
+      memberName: req.user.name,
+      type: "repayment",
+      amount: -payAmount,
+      status: "pending",
+      note: "Loan repayment",
+      receiptId: generateReceiptId("CHM"),
+      meta: { loanId: loan._id },
+    });
+    await txn.validate(); // ValidationError → 400 via the error middleware
+
     const deposit = await initiateDeposit({
       amount: payAmount,
       phone,
@@ -175,19 +194,9 @@ router.post(
 
     // Loan/group state is only mutated by the settlement service once the
     // payment reaches COMPLETED — inline below for simulated payments.
-    const txn = await Transaction.create({
-      groupId: loan.groupId,
-      groupName: loan.groupName,
-      memberId: req.userId,
-      memberName: req.user.name,
-      type: "repayment",
-      amount: -payAmount,
-      status: deposit.simulated ? "completed" : "pending",
-      note: "Loan repayment",
-      receiptId: generateReceiptId("CHM"),
-      pawapay: { depositId: deposit.id, status: deposit.status },
-      meta: { loanId: loan._id },
-    });
+    txn.pawapay = { depositId: deposit.id, status: deposit.status };
+    if (deposit.simulated) txn.status = "completed";
+    await txn.save();
 
     if (txn.status === "completed") {
       await settleCompletedTransaction(txn);

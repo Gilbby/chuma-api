@@ -94,24 +94,13 @@ router.post(
     const now = new Date();
     const feeDueDay = now.getDate() > 28 ? 28 : now.getDate();
 
-    // Charge month 1 fee from the creator
     const payerPhone = body.payerPhone || req.user.phone;
     const fee = config.rules.groupMonthlyFee;
-    const deposit = await initiateDeposit({
-      amount: fee,
-      phone: payerPhone,
-      provider: providerFromPhone(payerPhone),
-      statementDescription: "Chuma group fee",
-      metadata: [{ fieldName: "purpose", fieldValue: "group-creation" }],
-    });
 
-    if (deposit.status === "REJECTED") {
-      return res
-        .status(402)
-        .json({ error: "Group fee payment was rejected", detail: deposit.error });
-    }
-
-    const group = await Group.create({
+    // Build and validate the group BEFORE charging the creator — PawaPay must
+    // never collect the fee for a group our own schema would reject (bad
+    // groupType, missing name, …), which would orphan the deposit.
+    const group = new Group({
       name: body.name,
       description: body.description,
       groupType: body.groupType || "savings-group",
@@ -145,22 +134,43 @@ router.post(
       ],
       status: "active",
     });
+    await group.validate(); // ValidationError → 400 via the error middleware
 
-    // Record the fee transaction
-    const feeTxn = await Transaction.create({
+    const feeTxn = new Transaction({
       groupId: group._id,
       groupName: group.name,
       memberId: req.userId,
       memberName: req.user.name,
       type: "fee",
       amount: -fee,
-      paymentMethod: undefined,
-      status: deposit.simulated ? "completed" : "pending",
+      status: "pending",
       note: "Group registration fee (month 1)",
       receiptId: generateReceiptId("CHF"),
-      pawapay: { depositId: deposit.id, status: deposit.status },
       meta: { months: 1 },
     });
+    await feeTxn.validate();
+
+    // Everything checks out — now charge month 1 fee from the creator.
+    const deposit = await initiateDeposit({
+      amount: fee,
+      phone: payerPhone,
+      provider: providerFromPhone(payerPhone),
+      statementDescription: "Chuma group fee",
+      metadata: [{ fieldName: "purpose", fieldValue: "group-creation" }],
+    });
+
+    if (deposit.status === "REJECTED") {
+      return res
+        .status(402)
+        .json({ error: "Group fee payment was rejected", detail: deposit.error });
+    }
+
+    await group.save();
+
+    // Record the fee transaction
+    feeTxn.pawapay = { depositId: deposit.id, status: deposit.status };
+    if (deposit.simulated) feeTxn.status = "completed";
+    await feeTxn.save();
 
     if (feeTxn.status === "completed") {
       await settleCompletedTransaction(feeTxn);
@@ -290,6 +300,23 @@ router.post(
       return res.json({ message: "Fee already paid", monthsOwed: 0 });
 
     const payerPhone = req.body.payerPhone || req.user.phone;
+
+    // Validate the full transaction against the model BEFORE initiating the
+    // deposit — PawaPay must never move money for a request we would reject.
+    const txn = new Transaction({
+      groupId: group._id,
+      groupName: group.name,
+      memberId: req.userId,
+      memberName: req.user.name,
+      type: "fee",
+      amount: -amount,
+      status: "pending",
+      note: `Group fee — ${months} month(s)`,
+      receiptId: generateReceiptId("CHF"),
+      meta: { months },
+    });
+    await txn.validate(); // ValidationError → 400 via the error middleware
+
     const deposit = await initiateDeposit({
       amount,
       phone: payerPhone,
@@ -306,19 +333,9 @@ router.post(
 
     // feePaidThrough is only advanced by the settlement service once the
     // payment reaches COMPLETED — inline below for simulated payments.
-    const txn = await Transaction.create({
-      groupId: group._id,
-      groupName: group.name,
-      memberId: req.userId,
-      memberName: req.user.name,
-      type: "fee",
-      amount: -amount,
-      status: deposit.simulated ? "completed" : "pending",
-      note: `Group fee — ${months} month(s)`,
-      receiptId: generateReceiptId("CHF"),
-      pawapay: { depositId: deposit.id, status: deposit.status },
-      meta: { months },
-    });
+    txn.pawapay = { depositId: deposit.id, status: deposit.status };
+    if (deposit.simulated) txn.status = "completed";
+    await txn.save();
 
     if (txn.status === "completed") {
       await settleCompletedTransaction(txn);

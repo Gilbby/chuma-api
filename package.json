@@ -18,6 +18,7 @@
     "verify:shareout": "node scripts/verify-shareout-success.mjs",
     "verify:settlement-race": "node scripts/verify-settlement-race.mjs",
     "verify:record-violation": "node scripts/verify-record-violation.mjs",
+    "verify:validate-first": "node scripts/verify-validate-before-initiate.mjs",
     "verify:group-report": "node scripts/verify-group-report.mjs"
   },
   "keywords": [

@@ -35,16 +35,37 @@ router.post(
     if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_CONTRIBUTION)
       return res.status(400).json({ error: "Enter a valid amount" });
 
+    if (!["cycle", "topup"].includes(contributionType))
+      return res.status(400).json({ error: "Invalid contribution type" });
+
     const group = req.group;
     if (isGroupLocked(group.toObject()))
       return res.status(423).json({ error: "Group is locked (fee unpaid)" });
 
     const phone = payerPhone || req.user.phone;
     const isCash = paymentMethod === "Cash";
-    let deposit = { id: undefined, status: "ACCEPTED", simulated: true };
+
+    // Build the full transaction and run model validation BEFORE any money
+    // moves. PawaPay must never be told to initiate a deposit for a request
+    // our own schema would reject (e.g. a bad paymentMethod) — that would
+    // leave an orphaned deposit on their side with no record on ours.
+    const txn = new Transaction({
+      groupId,
+      groupName: group.name,
+      memberId: req.userId,
+      memberName: req.user.name,
+      type: "contribution",
+      amount: -amount, // money out of the member's wallet
+      contributionType,
+      paymentMethod,
+      status: "pending",
+      note: `${contributionType} contribution`,
+      receiptId: generateReceiptId("CHM"),
+    });
+    await txn.validate(); // ValidationError → 400 via the error middleware
 
     if (!isCash) {
-      deposit = await initiateDeposit({
+      const deposit = await initiateDeposit({
         amount,
         phone,
         provider: providerFromPhone(phone),
@@ -58,26 +79,15 @@ router.post(
         return res
           .status(402)
           .json({ error: "Payment rejected", detail: deposit.error });
+      txn.pawapay = { depositId: deposit.id, status: deposit.status };
+      if (deposit.simulated) txn.status = "completed";
     }
 
     // Balances are NOT touched here. Savings/group rollups are applied by the
     // settlement service once the payment settles: PawaPay COMPLETED (webhook
     // or reconciliation cron), inline below for simulated payments, or — for
     // Cash — when the treasurer confirms receipt via POST /:id/confirm-cash.
-    const txn = await Transaction.create({
-      groupId,
-      groupName: group.name,
-      memberId: req.userId,
-      memberName: req.user.name,
-      type: "contribution",
-      amount: -amount, // money out of the member's wallet
-      contributionType,
-      paymentMethod,
-      status: !isCash && deposit.simulated ? "completed" : "pending",
-      note: `${contributionType} contribution`,
-      receiptId: generateReceiptId("CHM"),
-      ...(isCash ? {} : { pawapay: { depositId: deposit.id, status: deposit.status } }),
-    });
+    await txn.save();
 
     if (txn.status === "completed") await settleCompletedTransaction(txn);
 
