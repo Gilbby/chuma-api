@@ -76,12 +76,17 @@ export async function runPenaltyDetection() {
 
     // Advance exactly one window per run; groups multiple cycles behind get
     // caught up over subsequent daily runs.
-    group.nextContributionDate = advanceContributionDate(
+    const nextContributionDate = advanceContributionDate(
       group.nextContributionDate,
       group.contributionFrequency
     );
-    group.lastCycleReconciledAt = windowEnd;
-    await group.save();
+    // Targeted $set of only the reconciliation-cursor fields. A full group.save()
+    // here would persist every field at its read-time value, clobbering a
+    // concurrent settlement's atomic $inc on walletBalance/totalSavings/etc.
+    await Group.updateOne(
+      { _id: group._id },
+      { $set: { nextContributionDate, lastCycleReconciledAt: windowEnd } }
+    );
   }
 
   // ─── B) LATE REPAYMENTS ────────────────────────────────────────────────────
@@ -117,8 +122,14 @@ export async function runPenaltyDetection() {
     if (p) lateRepayments++;
 
     // Mark the loan visibly overdue; the repay handler accepts "overdue" loans.
-    loan.status = "overdue";
-    await loan.save();
+    // Guarded targeted $set: flip status only while still "active", so a
+    // concurrent repayment settlement that completed the loan isn't reverted,
+    // and its atomic $inc on outstanding/installmentsPaid isn't clobbered by a
+    // full loan.save() of read-time values.
+    await Loan.updateOne(
+      { _id: loan._id, status: "active" },
+      { $set: { status: "overdue" } }
+    );
   }
 
   console.log(
