@@ -42,6 +42,19 @@ export async function distributeShareOut(group) {
   }));
   const result = computeShareOut(members, profit);
 
+  // Payouts draw real money from the merchant float. If the wallet can't
+  // cover the whole pot (outstanding loans still hold the cash, or the profit
+  // estimate exceeds what was actually collected), refuse BEFORE any payout
+  // goes out — status 409 lets callers keep the approval usable for later.
+  const wallet = group.walletBalance || 0;
+  if (result.totalToDistribute > wallet) {
+    const err = new Error(
+      `Share-out of K${result.totalToDistribute} exceeds the group wallet (K${wallet}). Collect outstanding loan repayments first, then distribute again.`
+    );
+    err.status = 409;
+    throw err;
+  }
+
   // Pay each member their share
   const payouts = [];
   for (const m of activeMembers) {

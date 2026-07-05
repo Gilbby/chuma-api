@@ -3,13 +3,17 @@ import cors from "cors";
 import helmet from "helmet";
 import compression from "compression";
 import morgan from "morgan";
-import rateLimit from "express-rate-limit";
 import mongoSanitize from "express-mongo-sanitize";
 import cron from "node-cron";
 
 import config from "./config/index.js";
 import { connectDB } from "./config/db.js";
 import { notFound, errorHandler } from "./middleware/error.js";
+import {
+  apiLimiter,
+  otpRequestLimiter,
+  otpVerifyLimiter,
+} from "./middleware/rateLimits.js";
 import { runFeeLockReminders } from "./jobs/feeLockReminders.job.js";
 import { runPenaltyDetection } from "./jobs/penaltyDetection.job.js";
 import { runStatusReconciliation } from "./jobs/statusReconciliation.job.js";
@@ -50,23 +54,12 @@ app.use(
 app.use(mongoSanitize());
 app.use(morgan(config.env === "development" ? "dev" : "combined"));
 
-// Basic rate limiting on auth (OTP abuse protection)
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// Tighter cap on OTP sends per IP — each one costs SMS credit
-const otpRequestLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Too many OTP requests, try again later" },
-});
+// Rate limiting (see middleware/rateLimits.js): a generous global per-IP
+// backstop, tight per-IP caps on the OTP endpoints (SMS costs money), and
+// per-user caps on payment/SMS actions applied inside the route files.
+app.use("/api", apiLimiter);
 app.use("/api/auth/request-otp", otpRequestLimiter);
+app.use("/api/auth/verify-otp", otpVerifyLimiter);
 
 // Health check
 app.get("/", (req, res) =>
@@ -81,7 +74,7 @@ app.get("/", (req, res) =>
 app.get("/api/health", (req, res) => res.json({ status: "ok", time: new Date() }));
 
 // Routes
-app.use("/api/auth", authLimiter, authRoutes);
+app.use("/api/auth", authRoutes);
 app.use("/api/groups", groupRoutes);
 app.use("/api/contributions", contributionRoutes);
 app.use("/api/loans", loanRoutes);

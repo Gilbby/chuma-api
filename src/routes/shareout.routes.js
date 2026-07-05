@@ -167,9 +167,21 @@ router.post(
         error: "Share-out requires an approved proposal. Propose it and collect admin approvals first.",
       });
 
-    const { payouts, summary } = await distributeShareOut(req.group);
-
-    res.json({ message: "Share-out distributed", payouts, summary });
+    try {
+      const { payouts, summary } = await distributeShareOut(req.group);
+      res.json({ message: "Share-out distributed", payouts, summary });
+    } catch (err) {
+      if (err.status === 409) {
+        // The wallet guard throws before ANY payout is sent, so the approval
+        // can safely be released back to "approved" for a later attempt.
+        await Approval.updateOne(
+          { _id: approval._id },
+          { status: "approved" }
+        );
+        return res.status(409).json({ error: err.message });
+      }
+      throw err;
+    }
   })
 );
 

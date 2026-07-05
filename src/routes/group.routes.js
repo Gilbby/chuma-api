@@ -11,6 +11,7 @@ import {
   requireGroupMember,
   requireGroupAdmin,
 } from "../middleware/groupAuth.js";
+import { paymentLimiter, inviteLimiter } from "../middleware/rateLimits.js";
 import {
   generateReceiptId,
   normalizePhone,
@@ -89,6 +90,7 @@ router.get(
 router.post(
   "/",
   requireAuth,
+  paymentLimiter,
   asyncHandler(async (req, res) => {
     const body = req.body;
     const now = new Date();
@@ -190,6 +192,7 @@ router.post(
 router.post(
   "/:id/invite",
   requireAuth,
+  inviteLimiter,
   requireGroupAdmin("id"),
   asyncHandler(async (req, res) => {
     const { phone, role = "Member" } = req.body;
@@ -245,10 +248,13 @@ router.post(
     const group = await Group.findById(req.params.id);
     if (!group) return res.status(404).json({ error: "Group not found" });
 
+    // Only a PENDING invite can be accepted — a member removed by the group's
+    // admins must be re-invited, not re-activate themselves.
     const member = group.members.find(
       (m) =>
-        (m.userId && String(m.userId) === String(req.userId)) ||
-        m.phone === req.user.phone
+        ((m.userId && String(m.userId) === String(req.userId)) ||
+          m.phone === req.user.phone) &&
+        m.status === "pending"
     );
     if (!member)
       return res.status(404).json({ error: "No invite found for you" });
@@ -290,6 +296,7 @@ router.get(
 router.post(
   "/:id/fee/pay",
   requireAuth,
+  paymentLimiter,
   requireGroupMember("id"),
   asyncHandler(async (req, res) => {
     const group = req.group;

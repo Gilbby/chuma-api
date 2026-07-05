@@ -44,6 +44,12 @@ const notificationSchema = new Schema(
 
 // Inbox listing, newest first; the userId prefix also covers read-all updates
 notificationSchema.index({ userId: 1, createdAt: -1 });
+// Auto-expire after 180 days: notifications are ephemeral (the app shows the
+// latest 100) and this keeps the collection from growing without bound.
+notificationSchema.index(
+  { createdAt: 1 },
+  { expireAfterSeconds: 180 * 24 * 60 * 60 }
+);
 
 export const Notification = mongoose.model("Notification", notificationSchema);
 export default Notification;

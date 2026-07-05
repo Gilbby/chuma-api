@@ -5,6 +5,7 @@ import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
 import { requireGroupMember } from "../middleware/groupAuth.js";
+import { paymentLimiter } from "../middleware/rateLimits.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import { isGroupLocked } from "../services/logic.service.js";
 import {
@@ -26,6 +27,7 @@ const MAX_CONTRIBUTION = 1_000_000; // ZMW sanity cap
 router.post(
   "/",
   requireAuth,
+  paymentLimiter,
   requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
     const { groupId, contributionType = "cycle", paymentMethod, payerPhone } =

@@ -10,6 +10,7 @@ import {
   requireGroupMember,
   isGroupAdmin,
 } from "../middleware/groupAuth.js";
+import { paymentLimiter } from "../middleware/rateLimits.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import {
   getMaxLoan,
@@ -56,6 +57,7 @@ router.get(
 router.post(
   "/",
   requireAuth,
+  paymentLimiter,
   requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
     const { groupId, durationMonths, reason } = req.body;
@@ -73,6 +75,25 @@ router.post(
     const maxLoan = getMaxLoan(savings, group.loanMaxMultiplier);
     const elig = checkEligibility(amount, maxLoan);
     if (!elig.eligible) return res.status(400).json({ error: elig.reason });
+
+    // One open loan per member per group: an approved second loan would
+    // over-extend the member past the savings-multiple limit.
+    const openLoan = await Loan.exists({
+      groupId,
+      memberId: req.userId,
+      status: { $in: ["pending", "active", "overdue"] },
+    });
+    if (openLoan)
+      return res.status(400).json({
+        error: "You already have an open loan in this group. Repay it first.",
+      });
+
+    // The payout draws real money from the merchant float — never let a group
+    // lend more than the cash it actually holds.
+    if (amount > (group.walletBalance || 0))
+      return res.status(400).json({
+        error: `Group wallet only holds K${group.walletBalance || 0} — it cannot cover a K${amount} loan yet.`,
+      });
 
     const months = durationMonths || group.constitution?.loanRepaymentMonths || 6;
     const breakdown = getLoanBreakdown(amount, group.loanInterestRate, months);
@@ -143,6 +164,7 @@ router.post(
 router.post(
   "/:id/repay",
   requireAuth,
+  paymentLimiter,
   asyncHandler(async (req, res) => {
     const { payerPhone } = req.body;
     const amount = Number(req.body.amount);

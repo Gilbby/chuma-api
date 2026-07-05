@@ -11,6 +11,7 @@ import {
   requireGroupAdmin,
   isGroupAdmin,
 } from "../middleware/groupAuth.js";
+import { paymentLimiter } from "../middleware/rateLimits.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import {
   computePenaltyAmount,
@@ -238,6 +239,7 @@ router.post(
 router.post(
   "/penalties/:id/pay",
   requireAuth,
+  paymentLimiter,
   asyncHandler(async (req, res) => {
     const penalty = await Penalty.findById(req.params.id);
     if (!penalty) return res.status(404).json({ error: "Penalty not found" });
@@ -401,6 +403,7 @@ router.get(
 router.post(
   "/transactions/:id/retry-payout",
   requireAuth,
+  paymentLimiter,
   asyncHandler(async (req, res) => {
     const failed = await Transaction.findById(req.params.id);
     if (
@@ -440,6 +443,14 @@ router.post(
     if (!member?.phone)
       return res.status(400).json({ error: "Member has no phone on record" });
 
+    // A payout draws real money from the merchant float — never resend more
+    // than the group's wallet actually holds.
+    const retryAmount = Math.abs(failed.amount);
+    if (retryAmount > (group.walletBalance || 0))
+      return res.status(409).json({
+        error: `Group wallet only holds K${group.walletBalance || 0} — it cannot cover this K${retryAmount} payout yet.`,
+      });
+
     // Claim the failed transaction before sending any money.
     const claimed = await Transaction.findOneAndUpdate(
       { _id: failed._id, status: "failed", "meta.retriedBy": { $exists: false } },
@@ -449,7 +460,7 @@ router.post(
     if (!claimed)
       return res.status(409).json({ error: "This payout was already retried" });
 
-    const amount = Math.abs(failed.amount);
+    const amount = retryAmount;
     const payout = await initiatePayout({
       amount,
       phone: member.phone,

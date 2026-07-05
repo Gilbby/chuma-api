@@ -1,4 +1,5 @@
 import express from "express";
+import { v4 as uuidv4 } from "uuid";
 import { Approval } from "../models/Approval.js";
 import { Loan } from "../models/Loan.js";
 import { Group } from "../models/Group.js";
@@ -73,36 +74,67 @@ router.post(
         .status(403)
         .json({ error: "Only group admins can vote on approvals" });
 
-    // Prevent double-voting
-    if (approval.votes.some((v) => String(v.adminId) === String(req.userId)))
-      return res.status(400).json({ error: "You already voted" });
-
-    approval.votes.push({
-      adminId: req.userId,
-      adminName: req.user.name,
-      decision,
-    });
-
-    const approves = approval.votes.filter((v) => v.decision === "approve").length;
-    const rejects = approval.votes.filter((v) => v.decision === "reject").length;
-
-    let executed = null;
-
-    if (rejects > 0 && decision === "reject") {
-      // Any rejection fails sensitive actions in this simple model
-      approval.status = "rejected";
-      if (approval.type === "loan" && approval.refId) {
-        await Loan.findByIdAndUpdate(approval.refId, { status: "rejected" });
-      }
-    } else if (approves >= approval.requiredApprovals) {
-      approval.status = "approved";
-      executed = await executeApproval(approval, req);
+    // Record the vote ATOMICALLY: it only lands if the approval is still
+    // pending and this admin hasn't voted. A read-push-save here lets two
+    // concurrent requests (double-tap, or two admins at once) each see a
+    // stale vote list — one vote gets clobbered, or worse, both requests
+    // reach the execution threshold and disburse real money twice.
+    const voted = await Approval.findOneAndUpdate(
+      {
+        _id: approval._id,
+        status: "pending",
+        "votes.adminId": { $ne: req.userId },
+      },
+      {
+        $push: {
+          votes: { adminId: req.userId, adminName: req.user.name, decision },
+        },
+      },
+      { new: true }
+    );
+    if (!voted) {
+      const fresh = await Approval.findById(approval._id).lean();
+      if (
+        fresh?.votes?.some((v) => String(v.adminId) === String(req.userId))
+      )
+        return res.status(400).json({ error: "You already voted" });
+      return res.status(400).json({ error: "Approval already resolved" });
     }
 
-    await approval.save();
+    const approves = voted.votes.filter((v) => v.decision === "approve").length;
+
+    let executed = null;
+    let result = voted;
+
+    if (decision === "reject") {
+      // Any rejection fails sensitive actions in this simple model.
+      const claimed = await Approval.findOneAndUpdate(
+        { _id: voted._id, status: "pending" },
+        { status: "rejected" },
+        { new: true }
+      );
+      if (claimed) {
+        result = claimed;
+        if (claimed.type === "loan" && claimed.refId)
+          await Loan.findByIdAndUpdate(claimed.refId, { status: "rejected" });
+      }
+    } else if (approves >= voted.requiredApprovals) {
+      // Atomic pending→approved claim: exactly ONE request may execute the
+      // action behind the approval, no matter how many votes land at once.
+      const claimed = await Approval.findOneAndUpdate(
+        { _id: voted._id, status: "pending" },
+        { status: "approved" },
+        { new: true }
+      );
+      if (claimed) {
+        result = claimed;
+        executed = await executeApproval(claimed, req);
+      }
+    }
+
     res.json({
-      approval,
-      progress: { approves, required: approval.requiredApprovals },
+      approval: result,
+      progress: { approves, required: voted.requiredApprovals },
       executed,
     });
   })
@@ -116,11 +148,47 @@ async function executeApproval(approval, req) {
     const loan = await Loan.findById(approval.refId);
     if (!loan) return null;
 
-    // Disburse to the member's wallet via PawaPay payout
-    const member = await Group.findById(loan.groupId).then((g) =>
-      g?.members.find((m) => String(m.userId) === String(loan.memberId))
+    const group = await Group.findById(loan.groupId);
+    const member = group?.members.find(
+      (m) => String(m.userId) === String(loan.memberId)
     );
     const phone = member?.phone;
+
+    // The payout draws real money from the merchant float — never disburse
+    // more than the group's wallet holds (it may have drained since the loan
+    // was requested). Record it as a failed, retryable payout so the admins
+    // are notified and can retry once contributions/repayments refill it.
+    const wallet = group?.walletBalance || 0;
+    if (loan.principal > wallet) {
+      const txn = await Transaction.create({
+        groupId: loan.groupId,
+        groupName: loan.groupName,
+        memberId: loan.memberId,
+        memberName: loan.memberName,
+        type: "loan",
+        amount: loan.principal,
+        status: "failed",
+        note: "Loan disbursement blocked — insufficient group wallet",
+        receiptId: generateReceiptId("CHM"),
+        pawapay: {
+          payoutId: uuidv4(), // never sent to PawaPay; keeps retry-payout usable
+          status: "REJECTED",
+          failureReason: JSON.stringify({
+            rejectionReason: "INSUFFICIENT_GROUP_WALLET",
+            message: `Group wallet K${wallet} cannot cover the K${loan.principal} loan`,
+          }),
+        },
+        meta: { loanId: loan._id },
+      });
+      await handleFailedTransaction(txn);
+      return {
+        type: "loan-disbursement-blocked",
+        reason: "insufficient-group-wallet",
+        loanId: loan._id,
+      };
+    }
+
+    // Disburse to the member's wallet via PawaPay payout
     const payout = await initiatePayout({
       amount: loan.principal,
       phone,
@@ -191,14 +259,25 @@ async function executeApproval(approval, req) {
   if (approval.type === "share-out" && approval.groupId) {
     const group = await Group.findById(approval.groupId);
     if (!group) return null;
-    const result = await distributeShareOut(group);
-    // One-shot action: mark executed so it can never distribute twice
-    approval.status = "executed";
-    return {
-      type: "share-out-distributed",
-      groupId: approval.groupId,
-      payouts: result.payouts,
-    };
+    try {
+      const result = await distributeShareOut(group);
+      // One-shot action: mark executed so it can never distribute twice
+      await Approval.updateOne({ _id: approval._id }, { status: "executed" });
+      approval.status = "executed";
+      return {
+        type: "share-out-distributed",
+        groupId: approval.groupId,
+        payouts: result.payouts,
+      };
+    } catch (err) {
+      if (err.status === 409) {
+        // Wallet can't cover the pot yet. The approval stays "approved" so an
+        // admin can run POST /api/shareout/:groupId/distribute once loans are
+        // repaid and the wallet is whole again.
+        return { type: "share-out-blocked", reason: err.message };
+      }
+      throw err;
+    }
   }
 
   return { type: approval.type, note: "Approved (no automated action)" };

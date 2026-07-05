@@ -26,20 +26,62 @@ import {
 // Grace window: don't poll transactions initiated moments ago — their
 // callback may legitimately still be in flight.
 const RECONCILE_MIN_AGE_MS = 2 * 60 * 1000;
+// Stop polling transactions this old: PawaPay finalises within minutes, so a
+// week-old pending transaction is stuck data, not an in-flight payment.
+// Without a ceiling every stuck transaction is polled every 5 minutes forever
+// — unbounded PawaPay API traffic that only ever grows.
+const RECONCILE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Cap PawaPay status polls per run so a backlog can't blow past the 5-minute
+// cron interval; the remainder is picked up on subsequent runs.
+const RECONCILE_BATCH_LIMIT = 100;
 
 const FINAL_STATUSES = ["COMPLETED", "FAILED"];
 
+// node-cron fires on schedule even if the previous run is still going; a slow
+// PawaPay would stack overlapping sweeps polling the same transactions.
+let sweepInProgress = false;
+
 export async function runStatusReconciliation() {
+  if (sweepInProgress) {
+    console.warn("[statusReconciliation] previous sweep still running — skipped");
+    return null;
+  }
+  sweepInProgress = true;
+  try {
+    return await sweep();
+  } finally {
+    sweepInProgress = false;
+  }
+}
+
+async function sweep() {
   const cutoff = new Date(Date.now() - RECONCILE_MIN_AGE_MS);
+  const maxAgeCutoff = new Date(Date.now() - RECONCILE_MAX_AGE_MS);
+  const pawapayLinked = [
+    { "pawapay.depositId": { $exists: true, $ne: null } },
+    { "pawapay.payoutId": { $exists: true, $ne: null } },
+  ];
 
   const candidates = await Transaction.find({
     status: "pending",
-    createdAt: { $lte: cutoff },
-    $or: [
-      { "pawapay.depositId": { $exists: true, $ne: null } },
-      { "pawapay.payoutId": { $exists: true, $ne: null } },
-    ],
+    createdAt: { $lte: cutoff, $gte: maxAgeCutoff },
+    $or: pawapayLinked,
+  })
+    .sort({ createdAt: 1 }) // oldest first — closest to timing out of the window
+    .limit(RECONCILE_BATCH_LIMIT);
+
+  // Aged out of the polling window: surface loudly for manual review — these
+  // need a human (check the PawaPay dashboard / resend-callback), not a poll.
+  const expired = await Transaction.countDocuments({
+    status: "pending",
+    createdAt: { $lt: maxAgeCutoff },
+    $or: pawapayLinked,
   });
+  if (expired > 0) {
+    console.error(
+      `[statusReconciliation] ${expired} pending transaction(s) older than 7 days — no longer polled, review manually`
+    );
+  }
 
   const counts = {
     reconciledCompleted: 0,
