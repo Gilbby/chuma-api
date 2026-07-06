@@ -6,7 +6,7 @@ import { Transaction } from "../models/Transaction.js";
 import { Approval } from "../models/Approval.js";
 import { Loan } from "../models/Loan.js";
 import { asyncHandler } from "../middleware/error.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, requireKyc } from "../middleware/auth.js";
 import {
   requireGroupMember,
   requireGroupAdmin,
@@ -90,6 +90,7 @@ router.get(
 router.post(
   "/",
   requireAuth,
+  requireKyc,
   paymentLimiter,
   asyncHandler(async (req, res) => {
     const body = req.body;
@@ -319,6 +320,7 @@ router.get(
 router.post(
   "/:id/fee/pay",
   requireAuth,
+  requireKyc,
   paymentLimiter,
   requireGroupMember("id"),
   asyncHandler(async (req, res) => {

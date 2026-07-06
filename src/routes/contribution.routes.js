@@ -3,7 +3,7 @@ import { Group } from "../models/Group.js";
 import { Transaction } from "../models/Transaction.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, requireKyc } from "../middleware/auth.js";
 import { requireGroupMember } from "../middleware/groupAuth.js";
 import { paymentLimiter } from "../middleware/rateLimits.js";
 import { generateReceiptId } from "../utils/helpers.js";
@@ -29,6 +29,7 @@ const MAX_CONTRIBUTION = 1_000_000; // ZMW sanity cap
 router.post(
   "/",
   requireAuth,
+  requireKyc,
   paymentLimiter,
   requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {

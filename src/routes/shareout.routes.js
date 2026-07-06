@@ -4,7 +4,7 @@ import { Penalty } from "../models/Penalty.js";
 import { Approval } from "../models/Approval.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, requireKyc } from "../middleware/auth.js";
 import {
   requireGroupMember,
   requireGroupAdmin,
@@ -155,6 +155,7 @@ router.post(
 router.post(
   "/:groupId/distribute",
   requireAuth,
+  requireKyc,
   requireGroupAdmin("groupId"),
   asyncHandler(async (req, res) => {
     const approval = await Approval.findOneAndUpdate(

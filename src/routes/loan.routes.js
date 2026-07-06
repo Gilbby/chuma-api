@@ -5,7 +5,7 @@ import { Approval } from "../models/Approval.js";
 import { Transaction } from "../models/Transaction.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, requireKyc } from "../middleware/auth.js";
 import {
   requireGroupMember,
   isGroupAdmin,
@@ -57,6 +57,7 @@ router.get(
 router.post(
   "/",
   requireAuth,
+  requireKyc,
   paymentLimiter,
   requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
@@ -164,6 +165,7 @@ router.post(
 router.post(
   "/:id/repay",
   requireAuth,
+  requireKyc,
   paymentLimiter,
   asyncHandler(async (req, res) => {
     const { payerPhone } = req.body;
