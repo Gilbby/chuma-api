@@ -26,10 +26,19 @@
       "Bash(curl -s -m 30 https://chuma-api.onrender.com/)",
       "Bash(curl -s -m 30 https://chuma-api.onrender.com/api/health)",
       "WebFetch(domain:docs.didit.me)",
-      "Bash(node -e \"const s=require\\('./package.json'\\).scripts||{}; console.log\\(Object.keys\\(s\\).join\\('\\\\n'\\)\\)\")"
+      "Bash(node -e \"const s=require\\('./package.json'\\).scripts||{}; console.log\\(Object.keys\\(s\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(curl -s -m 40 -o /dev/null -w \"health: HTTP %{http_code} in %{time_total}s\\\\n\" https://chuma-api.onrender.com/api/health)",
+      "Bash(curl -s -m 40 https://chuma-api.onrender.com/)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('app.json','utf8'\\)\\); console.log\\('app.json OK'\\)\")",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('eas.json','utf8'\\)\\); console.log\\('eas.json OK'\\)\")",
+      "Bash(node -e \"const a=require\\('./app.json'\\).expo; console.log\\('name:',a.name,'| slug:',a.slug,'| scheme:',a.scheme,'| android.package:',a.android.package,'| versionCode:',a.android.versionCode\\)\")",
+      "Bash(git commit -m ' *)",
+      "Bash(ls -la assets/images/splash-icon.png)",
+      "Bash(npx --no-install eas-cli whoami)"
     ],
     "additionalDirectories": [
-      "c:\\Users\\gilbe\\Documents\\Work\\Chum v0\\chuma\\src\\utils"
+      "c:\\Users\\gilbe\\Documents\\Work\\Chum v0\\chuma\\src\\utils",
+      "c:\\Users\\gilbe\\Documents\\Work\\Chum v0\\chuma"
     ]
   }
 }
