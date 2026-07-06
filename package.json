@@ -19,7 +19,8 @@
     "verify:settlement-race": "node scripts/verify-settlement-race.mjs",
     "verify:record-violation": "node scripts/verify-record-violation.mjs",
     "verify:validate-first": "node scripts/verify-validate-before-initiate.mjs",
-    "verify:group-report": "node scripts/verify-group-report.mjs"
+    "verify:group-report": "node scripts/verify-group-report.mjs",
+    "verify:pricing": "node scripts/verify-pricing.mjs"
   },
   "keywords": [
     "village-banking",
