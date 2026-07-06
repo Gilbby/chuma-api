@@ -149,4 +149,103 @@ export function priceContribution({
   };
 }
 
+/**
+ * The REVERSE of priceContribution: pricing a PAYOUT (share-out or loan
+ * disbursement). Here the member RECEIVES less than they are owed — every fee
+ * is deducted from `owed`, and the remainder is what we actually send.
+ *
+ * THE INVARIANT: netReceived + totalFees === owed, EXACTLY, in ngwee. Every
+ * ngwee of `owed` is either sent to the member or accounted as a fee — nothing
+ * is created or lost.
+ *
+ * @param {object}   p
+ * @param {number}   p.owed            What the member is entitled to receive (Kwacha, > 0).
+ * @param {number}   p.platformFee     Flat platform charge (Kwacha, >= 0), e.g. K2.
+ * @param {number}   p.pawapayRate     PawaPay percentage fee, e.g. 0.01 for 1%.
+ * @param {boolean}  p.feesOnEndUser   true  = PawaPay deducts its MNO+% fee on its own side,
+ *                                      so transactionFee here is 0.
+ *                                      false = we deduct the MNO+% fee from `owed` ourselves.
+ * @param {function} [p.mnoFee]        (amountKwacha) => MNO fee in Kwacha. Required unless
+ *                                      feesOnEndUser === true.
+ * @param {boolean}  [p.wholeKwachaOnly] Round the SENT amount (netReceived) DOWN to whole Kwacha.
+ * @returns {{ owed:number, platformFee:number, transactionFee:number,
+ *             totalFees:number, netReceived:number }}
+ */
+export function pricePayout({
+  owed,
+  platformFee,
+  pawapayRate,
+  feesOnEndUser,
+  mnoFee,
+  wholeKwachaOnly = false,
+}) {
+  // ── Guards (same style as priceContribution) ──────────────────────────────
+  if (typeof owed !== "number" || !Number.isFinite(owed) || owed <= 0) {
+    throw new Error("pricePayout: owed must be a finite number > 0");
+  }
+  if (
+    typeof platformFee !== "number" ||
+    !Number.isFinite(platformFee) ||
+    platformFee < 0
+  ) {
+    throw new Error("pricePayout: platformFee must be a finite number >= 0");
+  }
+  if (
+    typeof pawapayRate !== "number" ||
+    !Number.isFinite(pawapayRate) ||
+    pawapayRate < 0
+  ) {
+    throw new Error("pricePayout: pawapayRate must be a finite number >= 0");
+  }
+
+  const owedNgwee = toNgwee(owed);
+  const platformFeeNgwee = toNgwee(platformFee);
+
+  // ── Transaction fee, computed on the OWED amount ──────────────────────────
+  // Each part rounded UP to ngwee (conservative — never under-charge the fee).
+  let transactionFeeNgwee;
+  if (feesOnEndUser === true) {
+    // PawaPay deducts its MNO+% fee on its own side; nothing to withhold here.
+    transactionFeeNgwee = 0;
+  } else {
+    if (typeof mnoFee !== "function") {
+      throw new Error(
+        "pricePayout: mnoFee function is required when feesOnEndUser is false"
+      );
+    }
+    const pawapayPartNgwee = Math.ceil(pawapayRate * owedNgwee);
+    const mnoPartNgwee = feeNgweeCeil(mnoFee(owed));
+    transactionFeeNgwee = pawapayPartNgwee + mnoPartNgwee;
+  }
+
+  let totalFeesNgwee = transactionFeeNgwee + platformFeeNgwee;
+  let netReceivedNgwee = owedNgwee - totalFeesNgwee;
+
+  // Fees meet or exceed the payout (tiny payouts): refuse rather than send
+  // zero/negative. The caller surfaces this as "amount too small to pay out."
+  if (netReceivedNgwee <= 0) {
+    throw new Error("pricePayout: fees exceed payout amount");
+  }
+
+  // ── whole-Kwacha send: round the SENT amount DOWN (never send more than
+  //    owed-minus-fees), and roll the remainder into totalFees so the invariant
+  //    netReceived + totalFees === owed still holds exactly. ──
+  if (wholeKwachaOnly) {
+    const roundedNetNgwee = Math.floor(netReceivedNgwee / 100) * 100;
+    totalFeesNgwee += netReceivedNgwee - roundedNetNgwee;
+    netReceivedNgwee = roundedNetNgwee;
+    if (netReceivedNgwee <= 0) {
+      throw new Error("pricePayout: fees exceed payout amount");
+    }
+  }
+
+  return {
+    owed,
+    platformFee,
+    transactionFee: toKwacha(transactionFeeNgwee),
+    totalFees: toKwacha(totalFeesNgwee),
+    netReceived: toKwacha(netReceivedNgwee),
+  };
+}
+
 export default priceContribution;
