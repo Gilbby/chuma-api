@@ -33,6 +33,12 @@ const app = express();
 // X-Forwarded-For; without this, rate limits key on the proxy's IP.
 app.set("trust proxy", 1);
 
+// Disable ETags. This is a dynamic JSON API that clients poll (e.g. KYC status);
+// conditional caching makes Express reply 304 Not Modified on unchanged bodies,
+// which the mobile client's fetch layer surfaces as a bodyless 304 error instead
+// of the payload. Always return a full 200 so pollers get the current state.
+app.set("etag", false);
+
 app.use(helmet());
 app.use(
   cors({
