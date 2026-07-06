@@ -1,17 +1,21 @@
 // Verification for the platform-fee booking added to the settlement branches.
-// Two synthetic scenarios, each proving the booking is (a) a side record that
-// never contaminates the pool, and (b) exactly-once under a replayed callback:
+// Three synthetic scenarios, each proving the booking is (a) a side record that
+// never contaminates the pool/wallet math, and (b) exactly-once under a
+// replayed callback:
 //
 //   contribution — pool credited by EXACTLY base (K100), never the grossed-up
 //                  deposit (K109) / base+fee (K102); fee booked source
 //                  "contribution".
 //   share-out    — pool decremented by the FULL owed/snapshot (K100), never the
 //                  netReceived actually sent (K96); fee booked source "payout".
+//   loan         — loanCirculation +FULL principal (K100) / walletBalance
+//                  -FULL principal (K100), never the netReceived sent (K95);
+//                  fee booked source "payout".
 //
-// In both, the K2 platform fee lands in PlatformRevenue (a side record touching
-// no group/wallet/savings figure) and books EXACTLY ONCE — a replayed callback
-// reaching the settlement body again must not double-book, thanks to the
-// unique+sparse transactionId index plus the 11000 swallow.
+// In all three, the K2 platform fee lands in PlatformRevenue (a side record
+// touching no group/wallet/savings/circulation figure) and books EXACTLY ONCE —
+// a replayed callback reaching the settlement body again must not double-book,
+// thanks to the unique+sparse transactionId index plus the 11000 swallow.
 // Runs directly against the service (no HTTP); cleans up everything.
 //
 // Usage: npm run verify:platform-revenue
@@ -57,6 +61,11 @@ const txnId = oid();
 const soGroupId = oid();
 const soMemberId = oid();
 const soTxnId = oid();
+// Third, independent scenario for the loan settlement branch.
+const lnGroupId = oid();
+const lnMemberId = oid();
+const lnTxnId = oid();
+const lnLoanId = oid();
 const now = new Date();
 
 await db.collection("groups").insertOne({
@@ -94,7 +103,36 @@ await db.collection("transactions").insertOne({
   note: "Cycle share-out", meta: { memberSavings: 100 },
   createdAt: now, updatedAt: now,
 });
-console.log(`Seeded synthetic contribution ${txnId} (group ${groupId}) and share-out ${soTxnId} (group ${soGroupId})`);
+
+// Loan group: borrower is an active member; wallet holds float to lend from.
+// Known starting values (loanCirculation 0, walletBalance 500) so the FULL-
+// principal decrement/increment is observable.
+await db.collection("groups").insertOne({
+  _id: lnGroupId, name: "PLATFORM REVENUE LOAN VERIFY (synthetic)", groupType: "savings-group",
+  totalSavings: 0, walletBalance: 500, loanCirculation: 0, cycleProgress: 0,
+  members: [{ userId: lnMemberId, name: "Loan member", role: "Member", status: "active", savings: 0, contributions: 0, loanActive: 100 }],
+  status: "active", createdAt: now, updatedAt: now,
+});
+// The loan branch resolves the loan via txn.meta.loanId with status "pending",
+// activates it, and drives the group $inc off loan.principal / loan.outstanding.
+await db.collection("loans").insertOne({
+  _id: lnLoanId, groupId: lnGroupId, groupName: "PLATFORM REVENUE LOAN VERIFY (synthetic)",
+  memberId: lnMemberId, memberName: "Loan member",
+  principal: 100, outstanding: 100, installmentsPaid: 0, totalInstallments: 1,
+  status: "pending", history: [], createdAt: now, updatedAt: now,
+});
+// Persist a real loan disbursement transaction, as approval.routes writes it:
+// amount = 100 (full principal — drives circulation/wallet math), depositAmount
+// = 95 (netReceived after fees, actually sent — must NOT drive the wallet),
+// platformFee = 2, meta.loanId = the loan the branch activates.
+await db.collection("transactions").insertOne({
+  _id: lnTxnId, type: "loan", status: "completed",
+  amount: 100, depositAmount: 95, platformFee: 2,
+  memberId: lnMemberId, groupId: lnGroupId, groupName: "PLATFORM REVENUE LOAN VERIFY (synthetic)",
+  note: "Loan disbursed", meta: { loanId: lnLoanId },
+  createdAt: now, updatedAt: now,
+});
+console.log(`Seeded synthetic contribution ${txnId} (group ${groupId}), share-out ${soTxnId} (group ${soGroupId}), loan ${lnTxnId} (group ${lnGroupId})`);
 
 try {
   // Load the persisted doc back and settle it — same object the callback path
@@ -167,10 +205,42 @@ try {
   soRevDocs = await db.collection("platformrevenues").find({ transactionId: soTxnId }).toArray();
   check("share-out: second settle does NOT double-book platform revenue (still exactly 1)",
     soRevDocs.length === 1, `count=${soRevDocs.length}`);
+
+  // ══ LOAN SCENARIO ═══════════════════════════════════════════════════════
+  const lnTxn = await db.collection("transactions").findOne({ _id: lnTxnId });
+
+  // ── 1. FIRST settle: circulation/wallet move by the FULL principal, not 95 ──
+  await settleCompletedTransaction(lnTxn);
+  let lg = await db.collection("groups").findOne({ _id: lnGroupId });
+  const lnLoan = await db.collection("loans").findOne({ _id: lnLoanId });
+  check("loan: activated (status pending → active)",
+    lnLoan.status === "active", `status=${lnLoan.status}`);
+  check("loan: loanCirculation +FULL principal (0 → 100), not by 95",
+    lg.loanCirculation === 100, `loanCirculation=${lg.loanCirculation}`);
+  check("loan: walletBalance -FULL principal (500 → 400), not by 95",
+    lg.walletBalance === 400, `walletBalance=${lg.walletBalance}`);
+
+  // ── 2. PlatformRevenue side record: exactly one, K2, source "payout" ──
+  let lnRevDocs = await db.collection("platformrevenues").find({ transactionId: lnTxnId }).toArray();
+  check("loan: exactly ONE PlatformRevenue doc booked for this txn",
+    lnRevDocs.length === 1, `count=${lnRevDocs.length}`);
+  check("loan: PlatformRevenue amount=2, source=payout",
+    lnRevDocs.length === 1 && lnRevDocs[0].amount === 2 && lnRevDocs[0].source === "payout",
+    `doc=${JSON.stringify(lnRevDocs[0])}`);
+
+  // ── 3. SECOND settle of the SAME loan txn (replayed callback) ──
+  // The loan branch's own atomic status pending→active claim already blocks the
+  // circulation/wallet re-apply, so here we assert BOTH: no double-book AND the
+  // loan booking stays exactly one.
+  await settleCompletedTransaction(lnTxn);
+  lnRevDocs = await db.collection("platformrevenues").find({ transactionId: lnTxnId }).toArray();
+  check("loan: second settle does NOT double-book platform revenue (still exactly 1)",
+    lnRevDocs.length === 1, `count=${lnRevDocs.length}`);
 } finally {
-  await db.collection("groups").deleteMany({ _id: { $in: [groupId, soGroupId] } });
-  await db.collection("transactions").deleteMany({ _id: { $in: [txnId, soTxnId] } });
-  await db.collection("platformrevenues").deleteMany({ transactionId: { $in: [txnId, soTxnId] } });
+  await db.collection("groups").deleteMany({ _id: { $in: [groupId, soGroupId, lnGroupId] } });
+  await db.collection("transactions").deleteMany({ _id: { $in: [txnId, soTxnId, lnTxnId] } });
+  await db.collection("loans").deleteOne({ _id: lnLoanId });
+  await db.collection("platformrevenues").deleteMany({ transactionId: { $in: [txnId, soTxnId, lnTxnId] } });
   console.log("Cleanup done — synthetic platform-revenue documents removed.");
   await mongoose.disconnect();
 }
