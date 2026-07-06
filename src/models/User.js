@@ -25,6 +25,10 @@ const userSchema = new Schema(
       nrcNumber: { type: String }, // legacy manual-entry field
       photoUrl: { type: String }, // legacy manual-entry field
       decisionAt: { type: Date },
+      // Set true for accounts created via app signup — these must complete KYC
+      // before entering the app (hard gate). Users seeded/added directly (no
+      // flag) keep full access and only get the soft verification nudge.
+      onboardingRequired: { type: Boolean },
       status: {
         type: String,
         enum: ["incomplete", "pending", "verified", "rejected"],

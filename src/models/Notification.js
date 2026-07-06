@@ -18,6 +18,7 @@ const notificationSchema = new Schema(
         "invite",
         "penalty",
         "fee",
+        "kyc",
       ],
       required: true,
     },

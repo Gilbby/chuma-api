@@ -1,6 +1,7 @@
 import express from "express";
 import { Transaction } from "../models/Transaction.js";
 import { User } from "../models/User.js";
+import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { verifyPawaPayCallbackMiddleware } from "../middleware/pawapaySignature.js";
 import {
@@ -172,6 +173,8 @@ router.post(
         }
       }
       if (verified) await applyDiditIdentity(user, verified);
+      // Clear the standing "verify your identity" nudge now they're verified.
+      await Notification.deleteMany({ userId: user._id, type: "kyc" }).catch(() => {});
     } else if (user.kyc?.status !== "verified") {
       // Don't downgrade an already-verified user on a late/duplicate callback.
       const existing = user.kyc ? user.kyc.toObject?.() ?? user.kyc : {};

@@ -25,7 +25,8 @@
     "verify:payout-pricing": "node scripts/verify-payout-pricing.mjs",
     "verify:didit": "node scripts/verify-didit-service.mjs",
     "verify:didit-live": "node scripts/verify-didit-live.mjs",
-    "verify:didit-routes": "node scripts/verify-didit-routes.mjs"
+    "verify:didit-routes": "node scripts/verify-didit-routes.mjs",
+    "verify:require-kyc": "node scripts/verify-require-kyc.mjs"
   },
   "keywords": [
     "village-banking",

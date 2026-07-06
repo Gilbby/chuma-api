@@ -75,6 +75,11 @@ app.get("/api/health", (req, res) => res.json({ status: "ok", time: new Date() }
 
 // Routes
 app.use("/api/auth", authRoutes);
+// NOTE: KYC is currently a soft nudge, NOT a hard gate — unverified users keep
+// full access and are prompted to verify via an in-app notification + banner
+// (see ensureKycNudge in auth.routes.js). The requireKyc middleware exists and
+// is unit-tested for when we switch to hard enforcement; wire it onto these
+// mounts (requireAuth, requireKyc) to block money/group actions at that point.
 app.use("/api/groups", groupRoutes);
 app.use("/api/contributions", contributionRoutes);
 app.use("/api/loans", loanRoutes);

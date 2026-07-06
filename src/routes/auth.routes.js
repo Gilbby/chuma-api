@@ -131,6 +131,19 @@ router.post(
           .json({ error: "No account for this number. Please sign up." });
       user.pinResetAllowedUntil = pinResetAllowedUntil;
       await user.save();
+      // Routing:
+      //  - verified            → into the app
+      //  - unverified + signup  → HARD gate: must finish KYC (onboardingRequired)
+      //  - unverified + seeded  → soft: into the app with a standing verify nudge
+      const verified = user.kyc?.status === "verified";
+      if (!verified && user.kyc?.onboardingRequired) {
+        return res.json({
+          token: signToken(user._id),
+          user: sanitizeUser(user),
+          next: "kyc",
+        });
+      }
+      if (!verified) await ensureKycNudge(user._id);
       return res.json({
         token: signToken(user._id),
         user: sanitizeUser(user),
@@ -138,9 +151,15 @@ router.post(
       });
     }
 
-    // signup: create a stub user if not present, return token to finish setup
+    // signup: create a stub user if not present, return token to finish setup.
+    // onboardingRequired flags this as an app signup → KYC is mandatory before
+    // entering the app (seeded/manually-added users have no flag = soft nudge).
     if (!user) {
-      user = await User.create({ name: "New member", phone: normalized });
+      user = await User.create({
+        name: "New member",
+        phone: normalized,
+        kyc: { status: "incomplete", onboardingRequired: true },
+      });
 
       // Back-fill any phone-based invites so this new user sees pending
       // invitations in-app. Resilient: signup must still succeed if this fails.
@@ -180,6 +199,7 @@ router.post(
     }
     user.pinResetAllowedUntil = pinResetAllowedUntil;
     await user.save();
+    await ensureKycNudge(user._id);
     res.json({
       token: signToken(user._id),
       user: sanitizeUser(user),
@@ -192,6 +212,33 @@ router.post(
 function mergeKyc(user, patch) {
   const existing = user.kyc ? user.kyc.toObject?.() ?? user.kyc : {};
   user.kyc = { ...existing, ...patch };
+}
+
+// Ensure a single standing "complete your KYC" nudge sits in the user's inbox.
+// Idempotent — never duplicates if one is already there. Best-effort: a nudge
+// must never break authentication.
+async function ensureKycNudge(userId) {
+  try {
+    const existing = await Notification.findOne({ userId, type: "kyc" });
+    if (existing) return;
+    await Notification.create({
+      userId,
+      type: "kyc",
+      title: "Verify your identity",
+      body: "Complete a quick identity check to secure your account and unlock sending and receiving money.",
+    });
+  } catch (err) {
+    console.error("ensureKycNudge failed:", err.message);
+  }
+}
+
+// Remove any standing KYC nudge once the user is verified.
+async function clearKycNudge(userId) {
+  try {
+    await Notification.deleteMany({ userId, type: "kyc" });
+  } catch (err) {
+    console.error("clearKycNudge failed:", err.message);
+  }
 }
 
 /**
@@ -256,6 +303,7 @@ router.get(
         decisionAt: new Date(),
       });
       await req.user.save();
+      await clearKycNudge(req.user._id);
       return res.json({
         status: "approved",
         verified: { firstName, fullName: req.user.name },
@@ -270,6 +318,7 @@ router.get(
 
     if (status === "approved" && verified) {
       await applyVerifiedIdentity(req.user, verified);
+      await clearKycNudge(req.user._id);
     } else {
       mergeKyc(req.user, { status: modelStatusFor(status) });
       await req.user.save();

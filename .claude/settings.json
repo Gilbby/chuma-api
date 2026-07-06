@@ -25,7 +25,8 @@
       "PowerShell(Start-Sleep -Seconds 12; $conn = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { $p = Get-Process -Id $conn.OwningProcess; \"listening: PID $\\($p.Id\\) started $\\($p.StartTime\\)\" } else { \"port 5000: no listener yet\" })",
       "Bash(curl -s -m 30 https://chuma-api.onrender.com/)",
       "Bash(curl -s -m 30 https://chuma-api.onrender.com/api/health)",
-      "WebFetch(domain:docs.didit.me)"
+      "WebFetch(domain:docs.didit.me)",
+      "Bash(node -e \"const s=require\\('./package.json'\\).scripts||{}; console.log\\(Object.keys\\(s\\).join\\('\\\\n'\\)\\)\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\gilbe\\Documents\\Work\\Chum v0\\chuma\\src\\utils"
