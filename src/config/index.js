@@ -5,6 +5,24 @@ const bool = (v, def = false) =>
   v === undefined ? def : String(v).toLowerCase() === "true";
 const num = (v, def) => (v === undefined ? def : Number(v));
 
+/**
+ * MNO (mobile network operator) fee estimate, in Kwacha, for a deposit of the
+ * given Kwacha amount.
+ *
+ * ⚠️ PLACEHOLDER BANDS — THESE NUMBERS ARE ESTIMATES, NOT REAL TARIFFS. ⚠️
+ * They exist only so the gross-up math has something to solve against before we
+ * have production data. Replace the tiers below with the real Zambia MNO
+ * withdrawal/cash-out schedule from the live PawaPay dashboard before go-live.
+ * This is the ONE place fee bands live — tune here, never in the routes.
+ */
+const mnoFee = (amount) => {
+  if (amount <= 50) return 1;
+  if (amount <= 150) return 2;
+  if (amount <= 500) return 4;
+  if (amount <= 1000) return 7;
+  return 10;
+};
+
 export const config = {
   env: process.env.NODE_ENV || "development",
   port: num(process.env.PORT, 5000),
@@ -48,6 +66,14 @@ export const config = {
     baseUrl: process.env.KYC_PROVIDER_BASE_URL || "",
     apiKey: process.env.KYC_PROVIDER_API_KEY || "",
     enabled: bool(process.env.KYC_ENABLED, false),
+  },
+
+  pricing: {
+    platformFee: num(process.env.PLATFORM_FEE, 2),
+    pawapayRate: num(process.env.PAWAPAY_RATE, 0.01),
+    feesOnEndUser: bool(process.env.PAWAPAY_FEES_ON_END_USER, false), // Model B default
+    wholeKwachaOnly: bool(process.env.PAWAPAY_WHOLE_KWACHA_ONLY, true), // safe default for ZMW
+    mnoFee, // injected into priceContribution; bands are placeholders (see above)
   },
 
   rules: {

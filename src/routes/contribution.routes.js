@@ -13,6 +13,8 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { settleCompletedTransaction } from "../services/settlement.service.js";
+import { priceContribution } from "../services/pricing.service.js";
+import { config } from "../config/index.js";
 
 const router = express.Router();
 
@@ -47,6 +49,26 @@ router.post(
     const phone = payerPhone || req.user.phone;
     const isCash = paymentMethod === "Cash";
 
+    // PRICE: split the base (what the member typed = what gets pooled) from the
+    // grossed-up total we actually charge. `base` stays the pooled/credited
+    // figure; `depositAmount` is what PawaPay collects. Pure math — see
+    // pricing.service.js; fee bands come from config so tuning is one file.
+    const pricing = priceContribution({
+      base: amount,
+      platformFee: config.pricing.platformFee,
+      pawapayRate: config.pricing.pawapayRate,
+      feesOnEndUser: config.pricing.feesOnEndUser,
+      mnoFee: config.pricing.mnoFee,
+      wholeKwachaOnly: config.pricing.wholeKwachaOnly,
+    });
+    // Breakdown surfaced to the frontend so it can show the real total charged.
+    const breakdown = {
+      base: pricing.base,
+      platformFee: pricing.platformFee,
+      depositAmount: pricing.depositAmount,
+      feesCovered: pricing.feesCovered,
+    };
+
     // Build the full transaction and run model validation BEFORE any money
     // moves. PawaPay must never be told to initiate a deposit for a request
     // our own schema would reject (e.g. a bad paymentMethod) — that would
@@ -57,7 +79,9 @@ router.post(
       memberId: req.userId,
       memberName: req.user.name,
       type: "contribution",
-      amount: -amount, // money out of the member's wallet
+      amount: -amount, // BASE (pooled/credited) — money out of the member's wallet
+      depositAmount: pricing.depositAmount, // grossed-up total charged to the member
+      platformFee: pricing.platformFee, // platform revenue on this txn (never pooled)
       contributionType,
       paymentMethod,
       status: "pending",
@@ -68,7 +92,7 @@ router.post(
 
     if (!isCash) {
       const deposit = await initiateDeposit({
-        amount,
+        amount: pricing.depositAmount, // charge the grossed-up total, not the base
         phone,
         provider: providerFromPhone(phone),
         statementDescription: "Chuma savings",
@@ -114,11 +138,12 @@ router.post(
       }
       return res.status(201).json({
         transaction: txn,
+        pricing: breakdown,
         message: "Recorded — awaiting treasurer confirmation of cash receipt",
       });
     }
 
-    res.status(201).json({ transaction: txn });
+    res.status(201).json({ transaction: txn, pricing: breakdown });
   })
 );
 
