@@ -34,7 +34,8 @@
       "Bash(node -e \"const a=require\\('./app.json'\\).expo; console.log\\('name:',a.name,'| slug:',a.slug,'| scheme:',a.scheme,'| android.package:',a.android.package,'| versionCode:',a.android.versionCode\\)\")",
       "Bash(git commit -m ' *)",
       "Bash(ls -la assets/images/splash-icon.png)",
-      "Bash(npx --no-install eas-cli whoami)"
+      "Bash(npx --no-install eas-cli whoami)",
+      "Bash(git add *)"
     ],
     "additionalDirectories": [
       "c:\\Users\\gilbe\\Documents\\Work\\Chum v0\\chuma\\src\\utils",
