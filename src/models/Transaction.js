@@ -22,8 +22,16 @@ const transactionSchema = new Schema(
       ],
       required: true,
     },
-    // Signed amount: positive = money in to the member, negative = money out
+    // Signed amount: positive = money in to the member, negative = money out.
+    // amount = the BASE figure — what the member typed = what gets pooled/credited.
     amount: { type: Number, required: true },
+
+    // depositAmount = grossed-up total actually charged to the member (requested
+    // from PawaPay). platformFee = the platform charge on this txn (platform revenue,
+    // never pooled). Both only set on the contribution/deposit flow; other txn types
+    // leave them unset.
+    depositAmount: { type: Number },
+    platformFee: { type: Number, default: 0 },
 
     contributionType: {
       type: String,
