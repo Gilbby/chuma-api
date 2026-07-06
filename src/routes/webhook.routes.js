@@ -13,6 +13,7 @@ import {
   extractIdentity as extractDiditIdentity,
   applyVerifiedIdentity as applyDiditIdentity,
   modelStatusFor as diditModelStatusFor,
+  retrieveDecision as retrieveDiditDecision,
 } from "../services/didit.service.js";
 import config from "../config/index.js";
 
@@ -156,7 +157,20 @@ router.post(
 
     // Idempotent: a replayed "approved" callback just re-applies the same name.
     if (status === "approved") {
-      const verified = extractDiditIdentity(body.decision || body);
+      // v3 status.updated webhooks usually carry only the envelope (no
+      // id_verifications), so fetch the full decision report when the identity
+      // isn't inlined. The /kyc/status poll does the same, authoritatively.
+      let verified = extractDiditIdentity(body.decision || body);
+      if ((!verified || !verified.firstName) && sessionId) {
+        try {
+          const decision = await retrieveDiditDecision(sessionId);
+          verified = extractDiditIdentity(decision);
+        } catch (err) {
+          console.warn(
+            `[WEBHOOK] didit decision fetch failed for ${sessionId}: ${err.message}`
+          );
+        }
+      }
       if (verified) await applyDiditIdentity(user, verified);
     } else if (user.kyc?.status !== "verified") {
       // Don't downgrade an already-verified user on a late/duplicate callback.

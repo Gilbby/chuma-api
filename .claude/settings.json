@@ -22,7 +22,10 @@
       "Bash(node -e \"require\\('dns'\\).setServers\\(['8.8.8.8','1.1.1.1']\\); require\\('dns'\\).promises.setServers\\(['8.8.8.8','1.1.1.1']\\); import\\('./src/server.js'\\);\")",
       "PowerShell($conn = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; $p = Get-Process -Id $conn.OwningProcess; \"server PID $\\($p.Id\\) started: $\\($p.StartTime\\)\"; \"misc.routes.js edited: $\\(\\(Get-Item 'c:\\\\Users\\\\gilbe\\\\Documents\\\\Work\\\\Chum v0\\\\chuma-api\\\\src\\\\routes\\\\misc.routes.js'\\).LastWriteTime\\)\")",
       "Bash(curl -s --max-time 4 http://localhost:5000/api/health)",
-      "PowerShell(Start-Sleep -Seconds 12; $conn = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { $p = Get-Process -Id $conn.OwningProcess; \"listening: PID $\\($p.Id\\) started $\\($p.StartTime\\)\" } else { \"port 5000: no listener yet\" })"
+      "PowerShell(Start-Sleep -Seconds 12; $conn = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($conn\\) { $p = Get-Process -Id $conn.OwningProcess; \"listening: PID $\\($p.Id\\) started $\\($p.StartTime\\)\" } else { \"port 5000: no listener yet\" })",
+      "Bash(curl -s -m 30 https://chuma-api.onrender.com/)",
+      "Bash(curl -s -m 30 https://chuma-api.onrender.com/api/health)",
+      "WebFetch(domain:docs.didit.me)"
     ],
     "additionalDirectories": [
       "c:\\Users\\gilbe\\Documents\\Work\\Chum v0\\chuma\\src\\utils"

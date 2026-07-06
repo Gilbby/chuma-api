@@ -9,17 +9,22 @@ import config from "../config/index.js";
  * API key is used. It creates hosted verification sessions, reads decisions, and
  * verifies webhook signatures. See ../../.. frontend docs/didit-kyc.md.
  *
- * ⚠️ Targets Didit API v2. Confirm exact endpoint + field names against the
- * current Didit docs before go-live; the mappers below are deliberately
- * defensive about field-name variants.
+ * Targets Didit API v3 (https://docs.didit.me/sessions-api). Endpoints:
+ *   POST /v3/session/                     create a hosted session
+ *   GET  /v3/session/{id}/decision/       full decision report
+ * The mappers below are deliberately defensive about field-name variants.
  */
 
 // Didit's decision `status` strings → the app's KycStatus vocabulary.
+// (v3 status set: Approved, Declined, In Review, In Progress, Not Started,
+//  Expired, Abandoned, Kyc Expired, Resubmitted, Awaiting User.)
 const STATUS_MAP = {
   approved: "approved",
   declined: "declined",
   "in review": "in_review",
+  resubmitted: "in_review",
   "in progress": "pending",
+  "awaiting user": "pending",
   "not started": "not_started",
   abandoned: "abandoned",
   expired: "expired",
@@ -52,7 +57,7 @@ function client() {
 
 /** Create a Didit verification session. Returns { sessionId, url }. */
 export async function createSession({ userId, returnUrl }) {
-  const { data } = await client().post("/v2/session/", {
+  const { data } = await client().post("/v3/session/", {
     workflow_id: config.didit.workflowId,
     vendor_data: String(userId), // maps the webhook back to this user
     callback: returnUrl,
@@ -67,7 +72,7 @@ export async function createSession({ userId, returnUrl }) {
 /** Fetch the raw decision object for a session. */
 export async function retrieveDecision(sessionId) {
   const { data } = await client().get(
-    `/v2/session/${encodeURIComponent(sessionId)}/decision/`
+    `/v3/session/${encodeURIComponent(sessionId)}/decision/`
   );
   return data;
 }
@@ -75,8 +80,14 @@ export async function retrieveDecision(sessionId) {
 /** Pull a verified identity out of a Didit decision, defensively. */
 export function extractIdentity(decision) {
   if (!decision || typeof decision !== "object") return null;
+  // v3 nests extracted identity in the `id_verifications` array (first entry);
+  // older singular keys are kept as defensive fallbacks.
   const src =
-    decision.id_verification || decision.document || decision.kyc || decision;
+    (Array.isArray(decision.id_verifications) && decision.id_verifications[0]) ||
+    decision.id_verification ||
+    decision.document ||
+    decision.kyc ||
+    decision;
 
   const firstName = src.first_name || src.firstName || "";
   const lastName = src.last_name || src.lastName || "";
