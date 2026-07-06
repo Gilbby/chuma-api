@@ -206,6 +206,31 @@ export async function settleCompletedTransaction(txn) {
         { $set: { walletBalance: 0 } }
       );
 
+      // Book the platform fee as a SIDE record only — never pooled, touches no
+      // group/wallet/loanCirculation/loan/member figure. source "payout" (the
+      // disbursement is money going out, fee borne by the borrower). Runs inside
+      // this branch so it inherits the caller's exactly-once pending→final
+      // guard: it books once when the disbursement settles, and PlatformRevenue's
+      // unique+sparse transactionId index blocks any replayed callback / cron
+      // double-fire.
+      if (txn.platformFee && txn.platformFee > 0) {
+        try {
+          await PlatformRevenue.create({
+            groupId: txn.groupId,
+            transactionId: txn._id,
+            userId: txn.memberId, // the borrower
+            amount: txn.platformFee,
+            source: "payout",
+            currency: "ZMW",
+          });
+        } catch (err) {
+          // Duplicate key (11000) = this txn's revenue was ALREADY booked by a
+          // prior settlement (replayed callback / cron double-fire). That's the
+          // exactly-once guard working — swallow it. Re-throw anything else.
+          if (err?.code !== 11000) throw err;
+        }
+      }
+
       if (loan.memberId) {
         await Notification.create({
           userId: loan.memberId,
