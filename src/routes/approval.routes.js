@@ -13,6 +13,8 @@ import {
   initiatePayout,
   providerFromPhone,
 } from "../services/pawapay.service.js";
+import { pricePayout } from "../services/pricing.service.js";
+import { config } from "../config/index.js";
 import { distributeShareOut } from "../services/shareout.service.js";
 import {
   settleCompletedTransaction,
@@ -188,9 +190,54 @@ async function executeApproval(approval, req) {
       };
     }
 
+    // Deduct fees (PawaPay % + MNO + platform fee) from the principal — the
+    // borrower receives the net, but the loan/txn still record the FULL
+    // principal (they repay principal + interest; fees are the cost of
+    // borrowing). pricePayout THROWS when fees meet/exceed the principal (a
+    // principal too small to disburse after fees) — record it blocked like the
+    // insufficient-wallet path rather than crashing the approval executor.
+    let priced;
+    try {
+      priced = pricePayout({
+        owed: loan.principal,
+        platformFee: config.pricing.platformFee,
+        pawapayRate: config.pricing.pawapayRate,
+        feesOnEndUser: config.pricing.feesOnEndUser,
+        mnoFee: config.pricing.mnoFee,
+        wholeKwachaOnly: config.pricing.wholeKwachaOnly,
+      });
+    } catch {
+      const txn = await Transaction.create({
+        groupId: loan.groupId,
+        groupName: loan.groupName,
+        memberId: loan.memberId,
+        memberName: loan.memberName,
+        type: "loan",
+        amount: loan.principal,
+        status: "failed",
+        note: "Loan disbursement blocked — principal too small after fees",
+        receiptId: generateReceiptId("CHM"),
+        pawapay: {
+          payoutId: uuidv4(), // never sent to PawaPay; keeps retry-payout usable
+          status: "REJECTED",
+          failureReason: JSON.stringify({
+            rejectionReason: "PRINCIPAL_TOO_SMALL_AFTER_FEES",
+            message: `Principal K${loan.principal} does not cover the transaction and platform fees`,
+          }),
+        },
+        meta: { loanId: loan._id },
+      });
+      await handleFailedTransaction(txn);
+      return {
+        type: "loan-disbursement-blocked",
+        reason: "principal-too-small-after-fees",
+        loanId: loan._id,
+      };
+    }
+
     // Disburse to the member's wallet via PawaPay payout
     const payout = await initiatePayout({
-      amount: loan.principal,
+      amount: priced.netReceived,
       phone,
       provider: providerFromPhone(phone || ""),
       statementDescription: "Chuma loan",
@@ -211,7 +258,9 @@ async function executeApproval(approval, req) {
       memberId: loan.memberId,
       memberName: loan.memberName,
       type: "loan",
-      amount: loan.principal, // money in to the member
+      amount: loan.principal, // full principal — drives circulation/wallet math and repayment
+      depositAmount: priced.netReceived, // what the borrower actually received
+      platformFee: priced.platformFee,
       status: rejected ? "failed" : payout.simulated ? "completed" : "pending",
       note: "Loan disbursed",
       receiptId: generateReceiptId("CHM"),
@@ -233,7 +282,7 @@ async function executeApproval(approval, req) {
         userId: loan.memberId,
         type: "loan",
         title: "Loan approved",
-        body: `Your loan of K${loan.principal} has been approved. The money is on its way to your wallet.`,
+        body: `Your loan of K${loan.principal} is approved. After transaction and platform fees, K${priced.netReceived} is on its way to your wallet.`,
         groupId: loan.groupId,
         groupName: loan.groupName,
       });
