@@ -3,6 +3,8 @@ import { Transaction } from "../models/Transaction.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import { computeShareOut, estimateGroupProfit } from "./logic.service.js";
 import { initiatePayout, providerFromPhone } from "./pawapay.service.js";
+import { pricePayout } from "./pricing.service.js";
+import { config } from "../config/index.js";
 import {
   settleCompletedTransaction,
   handleFailedTransaction,
@@ -62,8 +64,34 @@ export async function distributeShareOut(group) {
       (r) => r.id === String(m.userId || m._id)
     );
     if (!calc || calc.share <= 0) continue;
+
+    // Deduct fees (PawaPay % + MNO + platform fee) from what the member is
+    // OWED (calc.share). The pool still decrements by the full owed at
+    // settlement; we just SEND the remainder. pricePayout THROWS when the fees
+    // meet or exceed the share (tiny stakes) — skip that member rather than
+    // crash the whole share-out. Their savings stay untouched (like a failed
+    // payout) so they can be handled manually.
+    let priced;
+    try {
+      priced = pricePayout({
+        owed: calc.share,
+        platformFee: config.pricing.platformFee,
+        pawapayRate: config.pricing.pawapayRate,
+        feesOnEndUser: config.pricing.feesOnEndUser,
+        mnoFee: config.pricing.mnoFee,
+        wholeKwachaOnly: config.pricing.wholeKwachaOnly,
+      });
+    } catch {
+      payouts.push({
+        member: m.name,
+        skipped: true,
+        reason: "amount too small after fees",
+      });
+      continue;
+    }
+
     const payout = await initiatePayout({
-      amount: calc.share,
+      amount: priced.netReceived,
       phone: m.phone,
       provider: providerFromPhone(m.phone || ""),
       statementDescription: "Chuma share out",
@@ -83,7 +111,9 @@ export async function distributeShareOut(group) {
       memberId: m.userId,
       memberName: m.name,
       type: "share-out",
-      amount: calc.share,
+      amount: calc.share, // full owed — what settlement decrements from the pool
+      depositAmount: priced.netReceived, // what we actually sent to the member
+      platformFee: priced.platformFee,
       status: rejected ? "failed" : payout.simulated ? "completed" : "pending",
       note: "Cycle share-out",
       receiptId: generateReceiptId("CHM"),
@@ -96,7 +126,13 @@ export async function distributeShareOut(group) {
     });
     if (txn.status === "completed") await settleCompletedTransaction(txn);
     else if (rejected) await handleFailedTransaction(txn);
-    payouts.push({ member: m.name, amount: calc.share, payoutId: payout.id });
+    payouts.push({
+      member: m.name,
+      owed: calc.share,
+      sent: priced.netReceived,
+      fees: priced.totalFees,
+      payoutId: payout.id,
+    });
   }
 
   return { payouts, summary: result };
