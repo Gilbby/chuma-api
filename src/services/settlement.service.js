@@ -240,6 +240,30 @@ export async function settleCompletedTransaction(txn) {
         txn.memberId ? { arrayFilters: [{ "m.userId": txn.memberId }] } : {}
       );
 
+      // Book the platform fee as a SIDE record only — never pooled, touches no
+      // group/wallet/savings figure. source "payout" separates payout-side
+      // revenue from collection-side. Runs inside this branch so it inherits the
+      // caller's exactly-once pending→final guard: it books once when the payout
+      // settles, and PlatformRevenue's unique+sparse transactionId index blocks
+      // any replayed callback / cron double-fire.
+      if (txn.platformFee && txn.platformFee > 0) {
+        try {
+          await PlatformRevenue.create({
+            groupId: txn.groupId,
+            transactionId: txn._id,
+            userId: txn.memberId, // the member being paid out
+            amount: txn.platformFee,
+            source: "payout",
+            currency: "ZMW",
+          });
+        } catch (err) {
+          // Duplicate key (11000) = this txn's revenue was ALREADY booked by a
+          // prior settlement (replayed callback / cron double-fire). That's the
+          // exactly-once guard working — swallow it. Re-throw anything else.
+          if (err?.code !== 11000) throw err;
+        }
+      }
+
       // Once every active member's stake is retired, the cycle is over; the
       // closing $set also normalises any drift the $inc left below zero.
       const group = await Group.findById(txn.groupId).lean();
