@@ -2,6 +2,7 @@ import { Group } from "../models/Group.js";
 import { Loan } from "../models/Loan.js";
 import { Penalty } from "../models/Penalty.js";
 import { Notification } from "../models/Notification.js";
+import { PlatformRevenue } from "../models/PlatformRevenue.js";
 import { advancePaidThrough } from "./logic.service.js";
 
 /**
@@ -43,6 +44,29 @@ export async function settleCompletedTransaction(txn) {
           },
         }
       );
+
+      // Book the platform fee as a SIDE record only — it is never pooled and
+      // touches no group/wallet/savings figure. Runs inside this branch so it
+      // inherits the caller's exactly-once pending→final guard: it books once
+      // when the transaction settles, and PlatformRevenue's unique+sparse
+      // transactionId index blocks any replayed callback / cron double-fire.
+      if (txn.platformFee && txn.platformFee > 0) {
+        try {
+          await PlatformRevenue.create({
+            groupId: txn.groupId,
+            transactionId: txn._id,
+            userId: txn.memberId, // the payer this txn carries
+            amount: txn.platformFee,
+            source: "contribution",
+            currency: "ZMW",
+          });
+        } catch (err) {
+          // Duplicate key (11000) = this txn's revenue was ALREADY booked by a
+          // prior settlement (replayed callback / cron double-fire). That's the
+          // exactly-once guard working — swallow it. Re-throw anything else.
+          if (err?.code !== 11000) throw err;
+        }
+      }
       return;
     }
 
