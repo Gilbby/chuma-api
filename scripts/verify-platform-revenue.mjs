@@ -1,12 +1,17 @@
-// Verification for the platform-fee booking added to the contribution
-// settlement branch. Proves that when a contribution settles the service:
-//   (a) credits the pool by EXACTLY the base (K100), never the grossed-up
-//       deposit (K109) and never base+fee (K102),
-//   (b) keeps the K2 platform fee OUT of the pool — it lands in PlatformRevenue,
-//       a side record that changes no group/wallet/savings figure, and
-//   (c) books that fee EXACTLY ONCE — a replayed callback reaching the
-//       settlement body again must not double-book, thanks to the unique+sparse
-//       transactionId index plus the 11000 swallow.
+// Verification for the platform-fee booking added to the settlement branches.
+// Two synthetic scenarios, each proving the booking is (a) a side record that
+// never contaminates the pool, and (b) exactly-once under a replayed callback:
+//
+//   contribution — pool credited by EXACTLY base (K100), never the grossed-up
+//                  deposit (K109) / base+fee (K102); fee booked source
+//                  "contribution".
+//   share-out    — pool decremented by the FULL owed/snapshot (K100), never the
+//                  netReceived actually sent (K96); fee booked source "payout".
+//
+// In both, the K2 platform fee lands in PlatformRevenue (a side record touching
+// no group/wallet/savings figure) and books EXACTLY ONCE — a replayed callback
+// reaching the settlement body again must not double-book, thanks to the
+// unique+sparse transactionId index plus the 11000 swallow.
 // Runs directly against the service (no HTTP); cleans up everything.
 //
 // Usage: npm run verify:platform-revenue
@@ -48,6 +53,10 @@ const check = (name, cond, detail = "") => {
 const groupId = oid();
 const memberId = oid();
 const txnId = oid();
+// Second, independent scenario for the share-out settlement branch.
+const soGroupId = oid();
+const soMemberId = oid();
+const soTxnId = oid();
 const now = new Date();
 
 await db.collection("groups").insertOne({
@@ -66,7 +75,26 @@ await db.collection("transactions").insertOne({
   contributionType: "cycle", paymentMethod: "MTN MoMo",
   createdAt: now, updatedAt: now,
 });
-console.log(`Seeded synthetic group ${groupId} and contribution ${txnId}`);
+
+// Share-out group: member has a K100 stake to retire, pool holds it (100/100).
+await db.collection("groups").insertOne({
+  _id: soGroupId, name: "PLATFORM REVENUE SHAREOUT VERIFY (synthetic)", groupType: "savings-group",
+  totalSavings: 100, walletBalance: 100, loanCirculation: 0, cycleProgress: 0.5,
+  members: [{ userId: soMemberId, name: "Shareout member", role: "Member", status: "active", savings: 100, contributions: 1 }],
+  status: "active", createdAt: now, updatedAt: now,
+});
+// Persist a real share-out transaction, as shareout.service writes it:
+// amount = 100 (full owed — what the pool decrements by), depositAmount = 96
+// (netReceived after fees, actually sent — must NOT drive the pool),
+// platformFee = 2, meta.memberSavings = 100 (snapshot the branch zeroes to).
+await db.collection("transactions").insertOne({
+  _id: soTxnId, type: "share-out", status: "completed",
+  amount: 100, depositAmount: 96, platformFee: 2,
+  memberId: soMemberId, groupId: soGroupId, groupName: "PLATFORM REVENUE SHAREOUT VERIFY (synthetic)",
+  note: "Cycle share-out", meta: { memberSavings: 100 },
+  createdAt: now, updatedAt: now,
+});
+console.log(`Seeded synthetic contribution ${txnId} (group ${groupId}) and share-out ${soTxnId} (group ${soGroupId})`);
 
 try {
   // Load the persisted doc back and settle it — same object the callback path
@@ -107,10 +135,42 @@ try {
   revDocs = await db.collection("platformrevenues").find({ transactionId: txnId }).toArray();
   check("second settle does NOT double-book platform revenue (still exactly 1)",
     revDocs.length === 1, `count=${revDocs.length}`);
+
+  // ══ SHARE-OUT SCENARIO ══════════════════════════════════════════════════
+  const soTxn = await db.collection("transactions").findOne({ _id: soTxnId });
+
+  // ── 1. FIRST settle: pool decremented by the FULL owed/snapshot, not 96 ──
+  await settleCompletedTransaction(soTxn);
+  let sg = await db.collection("groups").findOne({ _id: soGroupId });
+  let soMember = sg.members.find((m) => String(m.userId) === String(soMemberId));
+  check("share-out: member savings zeroed (savings=0, contributions=0)",
+    soMember.savings === 0 && soMember.contributions === 0,
+    `savings=${soMember.savings} contributions=${soMember.contributions}`);
+  check("share-out: totalSavings decremented by SNAPSHOT (100 → 0), not by 96",
+    sg.totalSavings === 0, `totalSavings=${sg.totalSavings}`);
+  check("share-out: walletBalance decremented by SHARE (100 → 0), not by 96",
+    sg.walletBalance === 0, `walletBalance=${sg.walletBalance}`);
+
+  // ── 2. PlatformRevenue side record: exactly one, K2, source "payout" ──
+  let soRevDocs = await db.collection("platformrevenues").find({ transactionId: soTxnId }).toArray();
+  check("share-out: exactly ONE PlatformRevenue doc booked for this txn",
+    soRevDocs.length === 1, `count=${soRevDocs.length}`);
+  check("share-out: PlatformRevenue amount=2, source=payout",
+    soRevDocs.length === 1 && soRevDocs[0].amount === 2 && soRevDocs[0].source === "payout",
+    `doc=${JSON.stringify(soRevDocs[0])}`);
+
+  // ── 3. SECOND settle of the SAME share-out txn (replayed callback) ──
+  // As in the contribution scenario, assert ONLY the booking's idempotency —
+  // the pool $inc double-applying on a direct second call is expected and is
+  // guarded upstream by the atomic pending→final guard, not by this branch.
+  await settleCompletedTransaction(soTxn);
+  soRevDocs = await db.collection("platformrevenues").find({ transactionId: soTxnId }).toArray();
+  check("share-out: second settle does NOT double-book platform revenue (still exactly 1)",
+    soRevDocs.length === 1, `count=${soRevDocs.length}`);
 } finally {
-  await db.collection("groups").deleteOne({ _id: groupId });
-  await db.collection("transactions").deleteOne({ _id: txnId });
-  await db.collection("platformrevenues").deleteMany({ transactionId: txnId });
+  await db.collection("groups").deleteMany({ _id: { $in: [groupId, soGroupId] } });
+  await db.collection("transactions").deleteMany({ _id: { $in: [txnId, soTxnId] } });
+  await db.collection("platformrevenues").deleteMany({ transactionId: { $in: [txnId, soTxnId] } });
   console.log("Cleanup done — synthetic platform-revenue documents removed.");
   await mongoose.disconnect();
 }
