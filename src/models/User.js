@@ -13,12 +13,18 @@ const userSchema = new Schema(
     avatar: { type: String },
     joinedDate: { type: Date, default: Date.now },
 
-    // KYC / NRC
+    // KYC — verified via Didit.me (see services/didit.service.js)
     kyc: {
-      nrcNumber: { type: String },
+      provider: { type: String }, // "didit" | "didit-sim"
+      sessionId: { type: String, index: true }, // Didit session id
+      firstName: { type: String }, // verified first name (used as display name)
       fullName: { type: String },
       dateOfBirth: { type: Date },
-      photoUrl: { type: String },
+      documentNumber: { type: String }, // NRC / passport number
+      documentType: { type: String },
+      nrcNumber: { type: String }, // legacy manual-entry field
+      photoUrl: { type: String }, // legacy manual-entry field
+      decisionAt: { type: Date },
       status: {
         type: String,
         enum: ["incomplete", "pending", "verified", "rejected"],

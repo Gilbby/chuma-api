@@ -14,6 +14,13 @@ import {
 } from "../utils/helpers.js";
 import { sendOtpSms } from "../services/sms.service.js";
 import { getTrustScore, getTrustBand } from "../services/logic.service.js";
+import {
+  createSession as createDiditSession,
+  retrieveDecision,
+  summarizeDecision,
+  applyVerifiedIdentity,
+  modelStatusFor,
+} from "../services/didit.service.js";
 import config from "../config/index.js";
 
 const router = express.Router();
@@ -181,25 +188,93 @@ router.post(
   })
 );
 
+// Merge new fields onto the user's kyc subdocument without dropping existing ones.
+function mergeKyc(user, patch) {
+  const existing = user.kyc ? user.kyc.toObject?.() ?? user.kyc : {};
+  user.kyc = { ...existing, ...patch };
+}
+
 /**
- * POST /api/auth/kyc  (auth)
- * Body: { nrcNumber, fullName, dateOfBirth, photoUrl? }
+ * POST /api/auth/kyc/session  (auth)
+ * Body: { returnUrl }  → { sessionId, url }
+ * Creates a Didit verification session. In simulated mode (DIDIT_ENABLED=false)
+ * returns the app's own deep link so onboarding proceeds without Didit.
  */
 router.post(
-  "/kyc",
+  "/kyc/session",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const { nrcNumber, fullName, dateOfBirth, photoUrl } = req.body;
-    req.user.kyc = {
-      nrcNumber,
-      fullName,
-      dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
-      photoUrl,
-      status: config.kyc.enabled ? "pending" : "pending",
-    };
-    if (fullName) req.user.name = fullName;
+    const returnUrl = req.body?.returnUrl;
+
+    if (!config.didit.enabled) {
+      const sessionId = `sim_${req.user._id}_${Date.now()}`;
+      mergeKyc(req.user, { provider: "didit-sim", sessionId, status: "pending" });
+      await req.user.save();
+      return res.json({ sessionId, url: returnUrl || config.publicBaseUrl });
+    }
+
+    const { sessionId, url } = await createDiditSession({
+      userId: req.user._id,
+      returnUrl,
+    });
+    mergeKyc(req.user, { provider: "didit", sessionId, status: "pending" });
     await req.user.save();
-    res.json({ message: "KYC saved", kyc: req.user.kyc, next: "pin" });
+    res.json({ sessionId, url });
+  })
+);
+
+/**
+ * GET /api/auth/kyc/status?sessionId=...  (auth)  → { status, verified? }
+ * Returns the current Didit decision. On approval, sets the user's display name
+ * to the verified first name (authoritative; the webhook does the same).
+ */
+router.get(
+  "/kyc/status",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    // Already resolved on this user → return the cached result.
+    if (req.user.kyc?.status === "verified") {
+      return res.json({
+        status: "approved",
+        verified: {
+          firstName: req.user.kyc.firstName || req.user.name,
+          fullName: req.user.kyc.fullName || req.user.name,
+          dateOfBirth: req.user.kyc.dateOfBirth,
+          documentNumber: req.user.kyc.documentNumber,
+        },
+      });
+    }
+
+    if (!config.didit.enabled) {
+      // Simulated mode: auto-approve, keeping the user's existing name.
+      const firstName = (req.user.name || "").split(/\s+/)[0] || req.user.name;
+      mergeKyc(req.user, {
+        provider: "didit-sim",
+        status: "verified",
+        firstName,
+        fullName: req.user.name,
+        decisionAt: new Date(),
+      });
+      await req.user.save();
+      return res.json({
+        status: "approved",
+        verified: { firstName, fullName: req.user.name },
+      });
+    }
+
+    const sessionId = req.query.sessionId || req.user.kyc?.sessionId;
+    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+
+    const decision = await retrieveDecision(String(sessionId));
+    const { status, verified } = summarizeDecision(decision);
+
+    if (status === "approved" && verified) {
+      await applyVerifiedIdentity(req.user, verified);
+    } else {
+      mergeKyc(req.user, { status: modelStatusFor(status) });
+      await req.user.save();
+    }
+    res.json({ status, verified });
   })
 );
 

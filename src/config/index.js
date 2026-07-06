@@ -68,6 +68,20 @@ export const config = {
     enabled: bool(process.env.KYC_ENABLED, false),
   },
 
+  // Didit.me identity verification. When DIDIT_ENABLED is false the KYC routes
+  // run in simulated mode (no external calls) so onboarding works in dev.
+  didit: {
+    baseUrl: process.env.DIDIT_BASE_URL || "https://verification.didit.me",
+    apiKey: process.env.DIDIT_API_KEY || "",
+    workflowId: process.env.DIDIT_WORKFLOW_ID || "",
+    webhookSecret: process.env.DIDIT_WEBHOOK_SECRET || "",
+    enabled: bool(process.env.DIDIT_ENABLED, false),
+    verifyWebhooks: bool(
+      process.env.DIDIT_VERIFY_WEBHOOKS,
+      bool(process.env.DIDIT_ENABLED, false) // on by default whenever Didit is live
+    ),
+  },
+
   pricing: {
     platformFee: num(process.env.PLATFORM_FEE, 2),
     pawapayRate: num(process.env.PAWAPAY_RATE, 0.01),
@@ -99,6 +113,10 @@ if (config.env === "production") {
     fatal.push("PAWAPAY_API_TOKEN must be set when PAYMENTS_ENABLED=true");
   if (config.pawapay.paymentsEnabled && !config.pawapay.verifyCallbacks)
     fatal.push("PAWAPAY_VERIFY_CALLBACKS must not be disabled when PAYMENTS_ENABLED=true");
+  if (config.didit.enabled && (!config.didit.apiKey || !config.didit.workflowId))
+    fatal.push("DIDIT_API_KEY and DIDIT_WORKFLOW_ID must be set when DIDIT_ENABLED=true");
+  if (config.didit.enabled && config.didit.verifyWebhooks && !config.didit.webhookSecret)
+    fatal.push("DIDIT_WEBHOOK_SECRET must be set when Didit webhook verification is on");
   if (config.africasTalking.smsEnabled && !config.africasTalking.apiKey)
     fatal.push("AT_API_KEY must be set when SMS_ENABLED=true");
   if (fatal.length) {

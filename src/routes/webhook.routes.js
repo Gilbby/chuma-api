@@ -1,11 +1,20 @@
 import express from "express";
 import { Transaction } from "../models/Transaction.js";
+import { User } from "../models/User.js";
 import { asyncHandler } from "../middleware/error.js";
 import { verifyPawaPayCallbackMiddleware } from "../middleware/pawapaySignature.js";
 import {
   settleCompletedTransaction,
   handleFailedTransaction,
 } from "../services/settlement.service.js";
+import {
+  verifyWebhookSignature as verifyDiditSignature,
+  normalizeStatus as normalizeDiditStatus,
+  extractIdentity as extractDiditIdentity,
+  applyVerifiedIdentity as applyDiditIdentity,
+  modelStatusFor as diditModelStatusFor,
+} from "../services/didit.service.js";
+import config from "../config/index.js";
 
 const router = express.Router();
 
@@ -100,6 +109,63 @@ router.post(
       failureReason
     );
     console.log(`[WEBHOOK] payout ${payoutId} → ${status} (${result})`);
+    res.status(200).json({ received: true });
+  })
+);
+
+/**
+ * Didit sends the final KYC decision here.
+ *
+ * Configure the webhook URL in the Didit console:
+ *   <PUBLIC_BASE_URL>/api/webhooks/didit
+ *
+ * Signature: HMAC-SHA256 (hex) of the raw body using DIDIT_WEBHOOK_SECRET,
+ * delivered in the x-signature header. Gated by DIDIT_VERIFY_WEBHOOKS (on by
+ * default whenever DIDIT_ENABLED=true; off for dev/Postman). Always 200 quickly.
+ *
+ * The raw body is captured globally in server.js (express.json verify hook).
+ */
+router.post(
+  "/didit",
+  asyncHandler(async (req, res) => {
+    if (config.didit.verifyWebhooks) {
+      const ok = verifyDiditSignature(req.rawBody, req.headers["x-signature"]);
+      if (!ok) {
+        console.warn("[WEBHOOK] rejected didit callback: bad signature");
+        return res.status(401).json({ error: "Invalid signature" });
+      }
+    }
+
+    const body = req.body || {};
+    const sessionId = body.session_id || body.sessionId;
+    const vendorData = body.vendor_data || body.vendorData;
+    const status = normalizeDiditStatus(body.status);
+
+    // Locate the user by vendor_data (our user id) first, then by session id.
+    let user = null;
+    if (vendorData) {
+      user = await User.findById(vendorData).catch(() => null);
+    }
+    if (!user && sessionId) {
+      user = await User.findOne({ "kyc.sessionId": sessionId });
+    }
+    if (!user) {
+      console.warn(`[WEBHOOK] didit callback for unknown session ${sessionId}`);
+      return res.status(200).json({ received: true });
+    }
+
+    // Idempotent: a replayed "approved" callback just re-applies the same name.
+    if (status === "approved") {
+      const verified = extractDiditIdentity(body.decision || body);
+      if (verified) await applyDiditIdentity(user, verified);
+    } else if (user.kyc?.status !== "verified") {
+      // Don't downgrade an already-verified user on a late/duplicate callback.
+      const existing = user.kyc ? user.kyc.toObject?.() ?? user.kyc : {};
+      user.kyc = { ...existing, status: diditModelStatusFor(status), decisionAt: new Date() };
+      await user.save();
+    }
+
+    console.log(`[WEBHOOK] didit ${sessionId} → ${status}`);
     res.status(200).json({ received: true });
   })
 );

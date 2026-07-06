@@ -6,3 +6,6 @@ npm-debug.log*
 .DS_Store
 dist/
 coverage/
+
+# markdown docs (not used by the app — README, docs, etc.)
+*.md
