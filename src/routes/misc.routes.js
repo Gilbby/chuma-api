@@ -29,6 +29,8 @@ import {
 } from "../services/pawapay.service.js";
 import { issuePenalty } from "../services/penalty.service.js";
 import { settleCompletedTransaction } from "../services/settlement.service.js";
+import { priceContribution, pricePayout } from "../services/pricing.service.js";
+import { config } from "../config/index.js";
 
 const router = express.Router();
 
@@ -522,6 +524,48 @@ router.post(
     if (retry.status === "completed") await settleCompletedTransaction(retry);
 
     res.json({ transaction: retry });
+  })
+);
+
+/**
+ * POST /api/pricing/preview  (auth, member)
+ * PURE fee-breakdown calculator — the single source of truth the UI shows
+ * BEFORE a member confirms a contribution / share-out / loan. NO side effects:
+ * no DB writes, no PawaPay calls, no Transaction. It only runs the same pricing
+ * functions the real routes use, with the same config.pricing values, so the
+ * preview matches exactly what will be charged.
+ * Body: { kind: "contribution" | "payout", amount: number }
+ */
+router.post(
+  "/pricing/preview",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { kind } = req.body || {};
+    const amount = Number(req.body?.amount);
+    if (!Number.isFinite(amount) || amount <= 0)
+      return res.status(400).json({ error: "amount must be a finite number > 0" });
+    if (kind !== "contribution" && kind !== "payout")
+      return res
+        .status(400)
+        .json({ error: 'kind must be "contribution" or "payout"' });
+
+    if (kind === "contribution") {
+      // priceContribution does not throw on small amounts — no tooSmall case.
+      const { base, platformFee, depositAmount, feesCovered } = priceContribution(
+        { base: amount, ...config.pricing }
+      );
+      return res.json({ base, platformFee, depositAmount, feesCovered });
+    }
+
+    // kind === "payout": pricePayout THROWS when fees meet/exceed the amount
+    // (tiny payouts). Surface that as a graceful 200 the UI can render, not a 500.
+    try {
+      const { owed, platformFee, transactionFee, totalFees, netReceived } =
+        pricePayout({ owed: amount, ...config.pricing });
+      return res.json({ owed, platformFee, transactionFee, totalFees, netReceived });
+    } catch {
+      return res.json({ tooSmall: true, reason: "amount too small after fees" });
+    }
   })
 );
 
