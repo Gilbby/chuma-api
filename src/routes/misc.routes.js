@@ -444,12 +444,22 @@ router.post(
       return res.status(400).json({ error: "Member has no phone on record" });
 
     // A payout draws real money from the merchant float — never resend more
-    // than the group's wallet actually holds.
-    const retryAmount = Math.abs(failed.amount);
-    if (retryAmount > (group.walletBalance || 0))
+    // than the group's wallet actually holds. The wallet is charged the FULL
+    // owed (loan principal / share-out share) at settlement, so cover-check
+    // against that, not against the net that goes out the door.
+    const owed = Math.abs(failed.amount);
+    if (owed > (group.walletBalance || 0))
       return res.status(409).json({
-        error: `Group wallet only holds K${group.walletBalance || 0} — it cannot cover this K${retryAmount} payout yet.`,
+        error: `Group wallet only holds K${group.walletBalance || 0} — it cannot cover this K${owed} payout yet.`,
       });
+
+    // Re-send the EXACT net that was priced when the original payout was first
+    // created — do NOT re-price. The original (failed) txn already had its fees
+    // deducted: depositAmount = owed − fees. Re-pricing `owed` here would deduct
+    // fees a SECOND time, so the member would receive owed − fees − fees.
+    // New txns always carry depositAmount; fall back to `owed` only for OLD
+    // failed txns that predate the fee work.
+    const sendAmount = failed.depositAmount ?? owed;
 
     // Claim the failed transaction before sending any money.
     const claimed = await Transaction.findOneAndUpdate(
@@ -460,9 +470,8 @@ router.post(
     if (!claimed)
       return res.status(409).json({ error: "This payout was already retried" });
 
-    const amount = retryAmount;
     const payout = await initiatePayout({
-      amount,
+      amount: sendAmount,
       phone: member.phone,
       provider: providerFromPhone(member.phone),
       statementDescription:
@@ -490,7 +499,14 @@ router.post(
       memberId: failed.memberId,
       memberName: failed.memberName,
       type: failed.type,
-      amount, // positive: money in to the member
+      amount: owed, // positive, full owed — settlement math drives off this
+      // Carry the original pricing so THIS retry books platform revenue exactly
+      // once when it settles: the original FAILED and never settled/booked, so
+      // no PlatformRevenue exists for this economic event yet. depositAmount is
+      // the net actually sent; platformFee is booked (guarded per-transactionId
+      // by PlatformRevenue's unique index) when the retry settles.
+      depositAmount: failed.depositAmount,
+      platformFee: failed.platformFee,
       status: payout.simulated ? "completed" : "pending",
       note:
         failed.type === "loan" ? "Loan disbursed (retry)" : "Cycle share-out (retry)",
