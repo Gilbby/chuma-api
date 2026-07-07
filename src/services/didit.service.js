@@ -57,11 +57,28 @@ function client() {
 
 /** Create a Didit verification session. Returns { sessionId, url }. */
 export async function createSession({ userId, returnUrl }) {
-  const { data } = await client().post("/v3/session/", {
+  const payload = {
     workflow_id: config.didit.workflowId,
     vendor_data: String(userId), // maps the webhook back to this user
     callback: returnUrl,
-  });
+  };
+  let data;
+  try {
+    ({ data } = await client().post("/v3/session/", payload));
+  } catch (err) {
+    // Surface Didit's actual rejection reason — a bare "status code 400" is
+    // useless. Common causes: stale workflow_id (edited/recreated workflow) or a
+    // callback URL Didit won't accept (e.g. a non-http app deep link).
+    const detail = err.response?.data;
+    console.error(
+      `[DIDIT] session create ${err.response?.status || ""} — ` +
+        `workflow_id=${config.didit.workflowId} callback=${returnUrl} ` +
+        `detail=${detail ? JSON.stringify(detail) : err.message}`
+    );
+    const reason =
+      detail?.detail || detail?.message || detail?.error || err.message;
+    throw new Error(`Didit session create failed: ${reason}`);
+  }
   const sessionId = data.session_id || data.id;
   const url = data.url || data.verification_url;
   if (!sessionId || !url)
