@@ -45,6 +45,17 @@ router.post(
 
     const normalized = normalizePhone(phone);
 
+    // Signup is only for new numbers. If a fully set-up account (has a PIN)
+    // already exists, don't start the create-account flow — send them to sign in.
+    // Seeded/invited stubs (no PIN yet) are allowed to claim their number.
+    if (mode === "signup") {
+      const existing = await User.findOne({ phone: normalized });
+      if (existing?.pinHash)
+        return res.status(409).json({
+          error: "An account already exists for this number. Please sign in instead.",
+        });
+    }
+
     // Per-phone throttle: SMS costs money and codes shouldn't be farmable
     const recent = await Otp.countDocuments({
       phone: normalized,
@@ -152,6 +163,12 @@ router.post(
     }
 
     // signup: create a stub user if not present, return token to finish setup.
+    // Guard (defense in depth — request-otp already blocks this): a completed
+    // account (has a PIN) can't be re-created via signup; route them to sign in.
+    if (user?.pinHash)
+      return res.status(409).json({
+        error: "An account already exists for this number. Please sign in instead.",
+      });
     // onboardingRequired flags this as an app signup → KYC is mandatory before
     // entering the app (seeded/manually-added users have no flag = soft nudge).
     if (!user) {
