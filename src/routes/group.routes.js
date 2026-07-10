@@ -100,6 +100,24 @@ router.post(
     const payerPhone = body.payerPhone || req.user.phone;
     const fee = config.rules.groupMonthlyFee;
 
+    // Optional co-admins named at creation — treasurer & secretary. Each becomes
+    // a PENDING member with their role and gets an invite notification + SMS,
+    // exactly like the /invite endpoint. Without this the phones were stored in
+    // governance and never turned into an actual invite (no member, no SMS).
+    const coAdminInvites = [];
+    for (const [rawPhone, role] of [
+      [body.treasurerPhone, "Treasurer"],
+      [body.secretaryPhone, "Secretary"],
+    ]) {
+      if (!rawPhone || typeof rawPhone !== "string") continue;
+      const normalized = normalizePhone(rawPhone);
+      // Skip the creator's own number and any duplicate across the two fields.
+      if (normalized === req.user.phone) continue;
+      if (coAdminInvites.some((c) => c.normalized === normalized)) continue;
+      const invited = await User.findOne({ phone: normalized });
+      coAdminInvites.push({ normalized, role, invited });
+    }
+
     // Build and validate the group BEFORE charging the creator — PawaPay must
     // never collect the fee for a group our own schema would reject (bad
     // groupType, missing name, …), which would orphan the deposit.
@@ -134,6 +152,14 @@ router.post(
           role: "Chairperson",
           status: "active",
         },
+        ...coAdminInvites.map((c) => ({
+          userId: c.invited?._id,
+          name: c.invited?.name || c.normalized,
+          phone: c.normalized,
+          role: c.role,
+          invitedByName: req.user.name,
+          status: "pending",
+        })),
       ],
       status: "active",
     });
@@ -169,6 +195,27 @@ router.post(
     }
 
     await group.save();
+
+    // Notify + SMS the treasurer/secretary now that the group exists. Same
+    // pattern as /invite: in-app notification only if they already have an
+    // account; SMS always so an unregistered invitee knows to sign up.
+    for (const c of coAdminInvites) {
+      if (c.invited) {
+        await Notification.create({
+          userId: c.invited._id,
+          type: "invite",
+          title: "Group invitation",
+          body: `${req.user.name} invited you to join ${group.name} as ${c.role}.`,
+          groupId: group._id,
+          groupName: group.name,
+          invitedBy: req.user.name,
+        });
+      }
+      await sendSms(
+        c.normalized,
+        `${req.user.name} invited you to join ${group.name} on Chuma as ${c.role}. Download the app and sign up with this number to join.`
+      );
+    }
 
     // Record the fee transaction
     feeTxn.pawapay = { depositId: deposit.id, status: deposit.status };
@@ -287,6 +334,24 @@ router.post(
     member.status = "active";
     member.userId = req.userId;
     member.name = req.user.name;
+
+    // Let the chairperson know their invitee accepted (and with which role, when
+    // it's an admin role like Treasurer/Secretary). Skip if the chairperson is
+    // the one accepting (can't happen for a pending invite, but be safe).
+    const chairId = group.governance?.chairpersonUserId;
+    if (chairId && String(chairId) !== String(req.userId)) {
+      const roleSuffix =
+        member.role && member.role !== "Member" ? ` as ${member.role}` : "";
+      await Notification.create({
+        userId: chairId,
+        type: "invite",
+        title: "Invitation accepted",
+        body: `${req.user.name} accepted your invitation and joined ${group.name}${roleSuffix}.`,
+        groupId: group._id,
+        groupName: group.name,
+      });
+    }
+
     res.json({ message: "Joined group", group: withFeeStatus(group) });
   })
 );

@@ -71,20 +71,38 @@ export async function settleCompletedTransaction(txn) {
     }
 
     case "penalty": {
-      // Atomic claim (status → paid): two payment transactions for the same
-      // penalty settling concurrently must credit the pool exactly once — a
-      // read-check-save here lets both pass the "already paid" check.
-      const penalty = txn.meta?.penaltyId
-        ? await Penalty.findOneAndUpdate(
-            { _id: txn.meta.penaltyId, status: { $ne: "paid" } },
-            { status: "paid" }
-          )
-        : null;
-      if (!penalty) return; // missing or already settled
-      // Route funds: group pool adds to walletBalance/totalSavings
-      if (penalty.fundsDestination === "group-pool") {
+      // One transaction can settle SEVERAL penalties (paid together in a single
+      // deposit — POST /penalties/pay). meta.penaltyId is the older single-pay
+      // shape; keep reading it so transactions already pending when this shipped
+      // still settle.
+      const ids = txn.meta?.penaltyIds?.length
+        ? txn.meta.penaltyIds
+        : txn.meta?.penaltyId
+          ? [txn.meta.penaltyId]
+          : [];
+      if (!ids.length) return;
+
+      // Atomic claim (status → paid) PER penalty: two payment transactions for
+      // the same penalty settling concurrently must credit the pool exactly
+      // once — a read-check-save here would let both pass the "already paid"
+      // check. Each claim is independent, so a partially-claimed batch (one
+      // penalty already settled by another txn) still credits the rest exactly
+      // once rather than skipping them.
+      let pooled = 0;
+      for (const id of ids) {
+        const penalty = await Penalty.findOneAndUpdate(
+          { _id: id, status: { $ne: "paid" } },
+          { status: "paid" }
+        );
+        if (!penalty) continue; // missing or already settled
+        // Route funds: group pool adds to walletBalance/totalSavings.
+        if (penalty.fundsDestination === "group-pool") pooled += penalty.amount;
+      }
+
+      // One write for the whole batch rather than one per penalty.
+      if (pooled > 0) {
         await Group.findByIdAndUpdate(txn.groupId, {
-          $inc: { walletBalance: penalty.amount, totalSavings: penalty.amount },
+          $inc: { walletBalance: pooled, totalSavings: pooled },
         });
       }
       return;
@@ -206,20 +224,20 @@ export async function settleCompletedTransaction(txn) {
         { $set: { walletBalance: 0 } }
       );
 
-      // Book the platform fee as a SIDE record only — never pooled, touches no
-      // group/wallet/loanCirculation/loan/member figure. source "payout" (the
-      // disbursement is money going out, fee borne by the borrower). Runs inside
-      // this branch so it inherits the caller's exactly-once pending→final
-      // guard: it books once when the disbursement settles, and PlatformRevenue's
-      // unique+sparse transactionId index blocks any replayed callback / cron
-      // double-fire.
-      if (txn.platformFee && txn.platformFee > 0) {
+      // The borrower received the full principal, so Chuma paid the PawaPay +
+      // MNO fee. Book that as NEGATIVE platform revenue — a cash cost, not a
+      // charge to anyone. A SIDE record only: it touches no group/wallet/
+      // loanCirculation/loan/member figure. Runs inside this branch so it
+      // inherits the caller's exactly-once pending→final guard: it books once
+      // when the disbursement settles, and PlatformRevenue's unique+sparse
+      // transactionId index blocks any replayed callback / cron double-fire.
+      if (txn.feesAbsorbed && txn.feesAbsorbed > 0) {
         try {
           await PlatformRevenue.create({
             groupId: txn.groupId,
             transactionId: txn._id,
-            userId: txn.memberId, // the borrower
-            amount: txn.platformFee,
+            userId: txn.memberId, // the borrower — who the cost was incurred for
+            amount: -txn.feesAbsorbed,
             source: "payout",
             currency: "ZMW",
           });

@@ -15,7 +15,10 @@ const platformRevenueSchema = new Schema(
       sparse: true,
     },
     userId: { type: Schema.Types.ObjectId, ref: "User" }, // who paid it
-    amount: { type: Number, required: true }, // the platform fee earned (e.g. K2)
+    // Signed. POSITIVE = fee earned (e.g. K2 on a contribution). NEGATIVE = a
+    // provider fee Chuma absorbed so the member received the full amount (loan
+    // disbursement). Sum the field for net revenue.
+    amount: { type: Number, required: true },
     source: {
       type: String,
       enum: ["contribution", "payout", "other"],

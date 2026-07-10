@@ -15,6 +15,7 @@
     "check:deposit": "node scripts/check-deposit.mjs",
     "kyc:list": "node scripts/kyc-approve.mjs --list",
     "kyc:approve": "node scripts/kyc-approve.mjs",
+    "verify:penalty-bulk-pay": "node scripts/verify-penalty-bulk-pay.mjs",
     "verify:retry-payout": "node scripts/verify-retry-payout.mjs",
     "verify:failed-payout": "node scripts/verify-failed-payout.mjs",
     "verify:shareout": "node scripts/verify-shareout-success.mjs",

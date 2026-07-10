@@ -85,7 +85,21 @@ const groupSchema = new Schema(
       gracePeriodDays: { type: Number, default: 2 },
       loanMultiplier: { type: Number, default: 3 },
       loanInterestRate: { type: Number, default: 5 },
-      loanRepaymentMonths: { type: Number, default: 6 },
+      loanRepaymentMonths: { type: Number, default: 6 }, // legacy single cap (fallback)
+      // Size-based repayment tiers: loans up to `maxAmount` may run up to
+      // `maxMonths`. `maxAmount: null` is the top tier (no upper bound).
+      loanRepaymentTiers: {
+        type: [
+          {
+            _id: false,
+            maxAmount: { type: Number, default: null }, // null = no cap (top band)
+            maxMonths: { type: Number, required: true },
+          },
+        ],
+        default: undefined,
+      },
+      // No new loans issued within this many months of share-out.
+      loanFreeWindowMonths: { type: Number, default: 1 },
       internalLendingEnabled: { type: Boolean, default: true },
       approvalThreshold: {
         type: String,

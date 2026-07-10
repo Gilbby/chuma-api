@@ -19,6 +19,7 @@ import {
   getRequiredApprovals,
   countAdmins,
   isGroupLocked,
+  getLoanTermConstraints,
 } from "../services/logic.service.js";
 import {
   initiatePayout,
@@ -96,7 +97,18 @@ router.post(
         error: `Group wallet only holds K${group.walletBalance || 0} — it cannot cover a K${amount} loan yet.`,
       });
 
-    const months = durationMonths || group.constitution?.loanRepaymentMonths || 6;
+    // A loan must be fully repaid before the cycle closes. Lending stops inside
+    // the group's loan-free window near share-out; otherwise the term is capped
+    // by BOTH the size tier and the months left until share-out. We clamp an
+    // over-long request rather than reject it.
+    const term = getLoanTermConstraints(group, amount);
+    if (term.lendingClosed)
+      return res.status(400).json({
+        error: `Lending is closed for this cycle. New loans stop within ${term.windowMonths} month(s) of share-out.`,
+      });
+    const requested =
+      durationMonths || group.constitution?.loanRepaymentMonths || term.maxTerm;
+    const months = Math.min(requested, term.maxTerm);
     const breakdown = getLoanBreakdown(amount, group.loanInterestRate, months);
 
     const loan = await Loan.create({

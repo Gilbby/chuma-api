@@ -12,9 +12,11 @@ import {
 import {
   computeShareOut,
   estimateGroupProfit,
+  computeLoanNetting,
   getRequiredApprovals,
   countAdmins,
 } from "../services/logic.service.js";
+import { Loan } from "../models/Loan.js";
 import { distributeShareOut } from "../services/shareout.service.js";
 
 const router = express.Router();
@@ -59,12 +61,22 @@ router.get(
 
     const result = computeShareOut(members, profit);
 
+    // Net any still-open loans against each borrower's share so the preview
+    // shows what members will actually receive in cash.
+    const openLoans = await Loan.find({
+      groupId: group._id,
+      status: { $in: ["active", "overdue"] },
+    }).select("memberId outstanding");
+    const netted = computeLoanNetting(result.members, openLoans);
+
     res.json({
       groupId: group._id,
       groupName: group.name,
       shareOutDate: group.shareOutDate,
       penaltyIncome,
       ...result,
+      members: netted.members,
+      totalNetCash: netted.totalNetCash,
     });
   })
 );

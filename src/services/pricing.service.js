@@ -248,4 +248,103 @@ export function pricePayout({
   };
 }
 
+/**
+ * A payout where CHUMA absorbs the provider fees — the member receives EXACTLY
+ * `owed`.
+ *
+ * Used for loan disbursement: a member approved for K5,000 receives K5,000, and
+ * the PawaPay + MNO cost is borne by the platform rather than netted out of the
+ * principal. Contrast `pricePayout`, where every fee comes OUT of `owed`.
+ *
+ * THE INVARIANT: sendAmount >= owed. No fee ever reduces what the member gets.
+ *
+ * When feesOnEndUser is false (Model B, the default) PawaPay does not deduct on
+ * its own side, so sending `owed` delivers `owed`. When it is true PawaPay
+ * deducts downstream and we cannot gross that up from here — which is why
+ * Model B is the default for disbursements.
+ *
+ * @param {object}   p
+ * @param {number}   p.owed             What the member must receive (Kwacha, > 0).
+ * @param {number}   p.platformFee      Flat platform charge (Kwacha, >= 0). NOT charged to
+ *                                       the member here — passed back so the caller can
+ *                                       record the revenue forgone.
+ * @param {number}   p.pawapayRate      PawaPay percentage fee, e.g. 0.01 for 1%.
+ * @param {boolean}  p.feesOnEndUser    true = PawaPay bills its fee on its own side.
+ * @param {function} [p.mnoFee]         (amountKwacha) => MNO fee in Kwacha. Required unless
+ *                                       feesOnEndUser === true.
+ * @param {boolean}  [p.wholeKwachaOnly] Round the SENT amount UP to whole Kwacha.
+ * @returns {{ owed:number, sendAmount:number, transactionFee:number,
+ *             platformFee:number, feesAbsorbed:number }}
+ */
+export function priceAbsorbedPayout({
+  owed,
+  platformFee,
+  pawapayRate,
+  feesOnEndUser,
+  mnoFee,
+  wholeKwachaOnly = false,
+}) {
+  // ── Guards (same style as pricePayout) ────────────────────────────────────
+  if (typeof owed !== "number" || !Number.isFinite(owed) || owed <= 0) {
+    throw new Error("priceAbsorbedPayout: owed must be a finite number > 0");
+  }
+  if (
+    typeof platformFee !== "number" ||
+    !Number.isFinite(platformFee) ||
+    platformFee < 0
+  ) {
+    throw new Error(
+      "priceAbsorbedPayout: platformFee must be a finite number >= 0"
+    );
+  }
+  if (
+    typeof pawapayRate !== "number" ||
+    !Number.isFinite(pawapayRate) ||
+    pawapayRate < 0
+  ) {
+    throw new Error(
+      "priceAbsorbedPayout: pawapayRate must be a finite number >= 0"
+    );
+  }
+
+  const owedNgwee = toNgwee(owed);
+
+  // The member gets the full amount. Rounding UP (never below `owed`) keeps the
+  // "receives exactly what was requested" promise when the provider rejects
+  // decimals; the extra ngwee are absorbed by us, like any other fee.
+  let sendNgwee = owedNgwee;
+  if (wholeKwachaOnly) {
+    sendNgwee = Math.ceil(sendNgwee / 100) * 100;
+  }
+
+  // What PawaPay + the MNO cost US on the amount we send. Rounded UP, as ever:
+  // over-estimate the fee so the wallet is never left short.
+  let transactionFeeNgwee;
+  if (feesOnEndUser === true) {
+    transactionFeeNgwee = 0;
+  } else {
+    if (typeof mnoFee !== "function") {
+      throw new Error(
+        "priceAbsorbedPayout: mnoFee function is required when feesOnEndUser is false"
+      );
+    }
+    const pawapayPartNgwee = Math.ceil(pawapayRate * sendNgwee);
+    const mnoPartNgwee = feeNgweeCeil(mnoFee(toKwacha(sendNgwee)));
+    transactionFeeNgwee = pawapayPartNgwee + mnoPartNgwee;
+  }
+
+  // The platform's cash cost: provider fees, plus any whole-Kwacha rounding we
+  // handed to the member. platformFee is NOT added — it is revenue never
+  // charged, not money leaving the wallet.
+  const feesAbsorbedNgwee = transactionFeeNgwee + (sendNgwee - owedNgwee);
+
+  return {
+    owed,
+    sendAmount: toKwacha(sendNgwee),
+    transactionFee: toKwacha(transactionFeeNgwee),
+    platformFee, // forgone revenue, for the caller to record
+    feesAbsorbed: toKwacha(feesAbsorbedNgwee),
+  };
+}
+
 export default priceContribution;

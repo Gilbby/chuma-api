@@ -9,13 +9,15 @@
 //   share-out    — pool decremented by the FULL owed/snapshot (K100), never the
 //                  netReceived actually sent (K96); fee booked source "payout".
 //   loan         — loanCirculation +FULL principal (K100) / walletBalance
-//                  -FULL principal (K100), never the netReceived sent (K95);
-//                  fee booked source "payout".
+//                  -FULL principal (K100). Chuma ABSORBS the provider fees so
+//                  the borrower receives the full principal (depositAmount ===
+//                  principal), and the absorbed cost books as NEGATIVE revenue
+//                  (-K3), source "payout". No platform fee is charged.
 //
-// In all three, the K2 platform fee lands in PlatformRevenue (a side record
-// touching no group/wallet/savings/circulation figure) and books EXACTLY ONCE —
-// a replayed callback reaching the settlement body again must not double-book,
-// thanks to the unique+sparse transactionId index plus the 11000 swallow.
+// In all three, the booking is a side record touching no group/wallet/savings/
+// circulation figure, and it books EXACTLY ONCE — a replayed callback reaching
+// the settlement body again must not double-book, thanks to the unique+sparse
+// transactionId index plus the 11000 swallow.
 // Runs directly against the service (no HTTP); cleans up everything.
 //
 // Usage: npm run verify:platform-revenue
@@ -123,11 +125,12 @@ await db.collection("loans").insertOne({
 });
 // Persist a real loan disbursement transaction, as approval.routes writes it:
 // amount = 100 (full principal — drives circulation/wallet math), depositAmount
-// = 95 (netReceived after fees, actually sent — must NOT drive the wallet),
-// platformFee = 2, meta.loanId = the loan the branch activates.
+// = 100 (the borrower receives the FULL principal; Chuma absorbs the fees),
+// platformFee = 0 (never charged on a disbursement), feesAbsorbed = 3 (the
+// provider cost we ate), meta.loanId = the loan the branch activates.
 await db.collection("transactions").insertOne({
   _id: lnTxnId, type: "loan", status: "completed",
-  amount: 100, depositAmount: 95, platformFee: 2,
+  amount: 100, depositAmount: 100, platformFee: 0, feesAbsorbed: 3,
   memberId: lnMemberId, groupId: lnGroupId, groupName: "PLATFORM REVENUE LOAN VERIFY (synthetic)",
   note: "Loan disbursed", meta: { loanId: lnLoanId },
   createdAt: now, updatedAt: now,
@@ -209,23 +212,23 @@ try {
   // ══ LOAN SCENARIO ═══════════════════════════════════════════════════════
   const lnTxn = await db.collection("transactions").findOne({ _id: lnTxnId });
 
-  // ── 1. FIRST settle: circulation/wallet move by the FULL principal, not 95 ──
+  // ── 1. FIRST settle: circulation/wallet move by the FULL principal ──
   await settleCompletedTransaction(lnTxn);
   let lg = await db.collection("groups").findOne({ _id: lnGroupId });
   const lnLoan = await db.collection("loans").findOne({ _id: lnLoanId });
   check("loan: activated (status pending → active)",
     lnLoan.status === "active", `status=${lnLoan.status}`);
-  check("loan: loanCirculation +FULL principal (0 → 100), not by 95",
+  check("loan: loanCirculation +FULL principal (0 → 100)",
     lg.loanCirculation === 100, `loanCirculation=${lg.loanCirculation}`);
-  check("loan: walletBalance -FULL principal (500 → 400), not by 95",
+  check("loan: walletBalance -FULL principal (500 → 400) — the absorbed fee never touches the group",
     lg.walletBalance === 400, `walletBalance=${lg.walletBalance}`);
 
-  // ── 2. PlatformRevenue side record: exactly one, K2, source "payout" ──
+  // ── 2. PlatformRevenue side record: exactly one, NEGATIVE (a cost), payout ──
   let lnRevDocs = await db.collection("platformrevenues").find({ transactionId: lnTxnId }).toArray();
   check("loan: exactly ONE PlatformRevenue doc booked for this txn",
     lnRevDocs.length === 1, `count=${lnRevDocs.length}`);
-  check("loan: PlatformRevenue amount=2, source=payout",
-    lnRevDocs.length === 1 && lnRevDocs[0].amount === 2 && lnRevDocs[0].source === "payout",
+  check("loan: PlatformRevenue amount=-3 (absorbed fee, a COST), source=payout",
+    lnRevDocs.length === 1 && lnRevDocs[0].amount === -3 && lnRevDocs[0].source === "payout",
     `doc=${JSON.stringify(lnRevDocs[0])}`);
 
   // ── 3. SECOND settle of the SAME loan txn (replayed callback) ──
@@ -234,7 +237,7 @@ try {
   // loan booking stays exactly one.
   await settleCompletedTransaction(lnTxn);
   lnRevDocs = await db.collection("platformrevenues").find({ transactionId: lnTxnId }).toArray();
-  check("loan: second settle does NOT double-book platform revenue (still exactly 1)",
+  check("loan: second settle does NOT double-book the absorbed fee (still exactly 1)",
     lnRevDocs.length === 1, `count=${lnRevDocs.length}`);
 } finally {
   await db.collection("groups").deleteMany({ _id: { $in: [groupId, soGroupId, lnGroupId] } });

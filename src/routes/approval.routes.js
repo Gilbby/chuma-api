@@ -13,7 +13,7 @@ import {
   initiatePayout,
   providerFromPhone,
 } from "../services/pawapay.service.js";
-import { pricePayout } from "../services/pricing.service.js";
+import { priceAbsorbedPayout } from "../services/pricing.service.js";
 import { config } from "../config/index.js";
 import { distributeShareOut } from "../services/shareout.service.js";
 import {
@@ -190,15 +190,16 @@ async function executeApproval(approval, req) {
       };
     }
 
-    // Deduct fees (PawaPay % + MNO + platform fee) from the principal — the
-    // borrower receives the net, but the loan/txn still record the FULL
-    // principal (they repay principal + interest; fees are the cost of
-    // borrowing). pricePayout THROWS when fees meet/exceed the principal (a
-    // principal too small to disburse after fees) — record it blocked like the
-    // insufficient-wallet path rather than crashing the approval executor.
+    // Chuma absorbs the PawaPay % + MNO fee: the borrower receives the FULL
+    // principal, and the platform bears the cost of getting it there. The
+    // platform fee is not charged on a disbursement either. Fees can therefore
+    // never exceed the principal, so there is no "too small after fees" case —
+    // priceAbsorbedPayout only throws on a bad principal or pricing config.
+    // Record that blocked (like the insufficient-wallet path) rather than
+    // crashing the approval executor.
     let priced;
     try {
-      priced = pricePayout({
+      priced = priceAbsorbedPayout({
         owed: loan.principal,
         platformFee: config.pricing.platformFee,
         pawapayRate: config.pricing.pawapayRate,
@@ -215,14 +216,14 @@ async function executeApproval(approval, req) {
         type: "loan",
         amount: loan.principal,
         status: "failed",
-        note: "Loan disbursement blocked — principal too small after fees",
+        note: "Loan disbursement blocked — could not price the payout",
         receiptId: generateReceiptId("CHM"),
         pawapay: {
           payoutId: uuidv4(), // never sent to PawaPay; keeps retry-payout usable
           status: "REJECTED",
           failureReason: JSON.stringify({
-            rejectionReason: "PRINCIPAL_TOO_SMALL_AFTER_FEES",
-            message: `Principal K${loan.principal} does not cover the transaction and platform fees`,
+            rejectionReason: "PAYOUT_PRICING_FAILED",
+            message: `Could not price the disbursement of K${loan.principal}`,
           }),
         },
         meta: { loanId: loan._id },
@@ -230,14 +231,14 @@ async function executeApproval(approval, req) {
       await handleFailedTransaction(txn);
       return {
         type: "loan-disbursement-blocked",
-        reason: "principal-too-small-after-fees",
+        reason: "payout-pricing-failed",
         loanId: loan._id,
       };
     }
 
     // Disburse to the member's wallet via PawaPay payout
     const payout = await initiatePayout({
-      amount: priced.netReceived,
+      amount: priced.sendAmount,
       phone,
       provider: providerFromPhone(phone || ""),
       statementDescription: "Chuma loan",
@@ -259,8 +260,9 @@ async function executeApproval(approval, req) {
       memberName: loan.memberName,
       type: "loan",
       amount: loan.principal, // full principal — drives circulation/wallet math and repayment
-      depositAmount: priced.netReceived, // what the borrower actually received
-      platformFee: priced.platformFee,
+      depositAmount: priced.sendAmount, // what the borrower actually received (== principal)
+      platformFee: 0, // not charged on a disbursement — Chuma absorbs the cost
+      feesAbsorbed: priced.feesAbsorbed, // platform's cash cost, booked as negative revenue
       status: rejected ? "failed" : payout.simulated ? "completed" : "pending",
       note: "Loan disbursed",
       receiptId: generateReceiptId("CHM"),
@@ -282,7 +284,7 @@ async function executeApproval(approval, req) {
         userId: loan.memberId,
         type: "loan",
         title: "Loan approved",
-        body: `Your loan of K${loan.principal} is approved. After transaction and platform fees, K${priced.netReceived} is on its way to your wallet.`,
+        body: `Your loan of K${loan.principal} is approved and is on its way to your wallet.`,
         groupId: loan.groupId,
         groupName: loan.groupName,
       });

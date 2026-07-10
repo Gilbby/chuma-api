@@ -33,6 +33,11 @@ const transactionSchema = new Schema(
     depositAmount: { type: Number },
     platformFee: { type: Number, default: 0 },
 
+    // feesAbsorbed = provider fees Chuma paid so the member received the full
+    // amount (loan disbursement). Booked as NEGATIVE platform revenue on
+    // settlement — a cash cost, the mirror of platformFee.
+    feesAbsorbed: { type: Number, default: 0 },
+
     contributionType: {
       type: String,
       enum: ["cycle", "topup", "penalty"],

@@ -73,6 +73,33 @@ export function computeShareOut(members, totalProfit) {
   };
 }
 
+// Net each member's outstanding loan debt against their share-out share. A loan
+// still open at share-out is paid off from the borrower's distribution first, so
+// `netPayout` is the cash they actually receive. `members` are computeShareOut
+// rows ({ id, share, … }); `openLoans` are Loan docs ({ memberId, outstanding }).
+export function computeLoanNetting(members, openLoans) {
+  const debtByMember = new Map();
+  for (const l of openLoans || []) {
+    const key = String(l.memberId);
+    debtByMember.set(key, (debtByMember.get(key) || 0) + (l.outstanding || 0));
+  }
+  let totalNetCash = 0;
+  const enriched = members.map((m) => {
+    const outstanding = debtByMember.get(String(m.id)) || 0;
+    const appliedToLoan = Math.min(m.share, outstanding);
+    const netPayout = Math.max(0, m.share - appliedToLoan);
+    totalNetCash += netPayout;
+    return {
+      ...m,
+      outstanding,
+      appliedToLoan,
+      netPayout,
+      residualDebt: outstanding - appliedToLoan,
+    };
+  });
+  return { members: enriched, totalNetCash };
+}
+
 export function estimateGroupProfit(
   loanCirculation,
   loanInterestRate,
@@ -105,6 +132,55 @@ export function checkEligibility(principal, maxLoan) {
   if (principal > maxLoan)
     return { eligible: false, reason: `Exceeds your limit of ${maxLoan}` };
   return { eligible: true };
+}
+
+// Fallback size-based repayment tiers (ZMW) for groups with none stored —
+// mirrors the app's default for a 6-month cycle (defaultTiersForCycle(6)). The
+// app sends cycle-tuned tiers on create; this is only a safety net, and the
+// per-loan cycle cap (getLoanTermConstraints) constrains the term either way.
+export const DEFAULT_LOAN_REPAYMENT_TIERS = [
+  { maxAmount: 500, maxMonths: 1 },
+  { maxAmount: 2000, maxMonths: 1 },
+  { maxAmount: 5000, maxMonths: 2 },
+  { maxAmount: null, maxMonths: 3 },
+];
+
+// Longest term (months) a loan of `amount` may take under a group's tiers.
+export function maxTermForAmount(amount, tiers) {
+  const list = tiers && tiers.length ? tiers : DEFAULT_LOAN_REPAYMENT_TIERS;
+  const sorted = [...list].sort((a, b) => {
+    if (a.maxAmount === null || a.maxAmount === undefined) return 1;
+    if (b.maxAmount === null || b.maxAmount === undefined) return -1;
+    return a.maxAmount - b.maxAmount;
+  });
+  for (const t of sorted) {
+    if (t.maxAmount === null || t.maxAmount === undefined || amount <= t.maxAmount)
+      return t.maxMonths;
+  }
+  return sorted[sorted.length - 1]?.maxMonths ?? 6;
+}
+
+export const DEFAULT_LOAN_FREE_WINDOW_MONTHS = 1;
+
+// Whole months from `from` until `date` (floored, never negative). Infinity when
+// no date is set (cycle unconstrained).
+export function monthsUntil(date, from = new Date()) {
+  if (!date) return Infinity;
+  const days = (new Date(date).getTime() - from.getTime()) / (1000 * 60 * 60 * 24);
+  return Math.max(0, Math.floor(days / 30));
+}
+
+// Constraints for a loan of `amount` in `group`: the effective max term (min of
+// size tier and months-to-share-out) and whether lending is closed for the
+// cycle (inside the loan-free window).
+export function getLoanTermConstraints(group, amount, now = new Date()) {
+  const tierCap = maxTermForAmount(amount, group?.constitution?.loanRepaymentTiers);
+  const monthsToShareOut = monthsUntil(group?.shareOutDate, now);
+  const windowMonths =
+    group?.constitution?.loanFreeWindowMonths ?? DEFAULT_LOAN_FREE_WINDOW_MONTHS;
+  const lendingClosed = monthsToShareOut < windowMonths;
+  const maxTerm = Math.max(1, Math.min(tierCap, monthsToShareOut));
+  return { tierCap, monthsToShareOut, windowMonths, lendingClosed, maxTerm };
 }
 
 // ─── GROUP FEES (groupFees.ts) ──────────────────────────────────────────────

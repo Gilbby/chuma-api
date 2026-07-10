@@ -302,6 +302,106 @@ router.post(
   })
 );
 
+/**
+ * POST /api/penalties/pay  (auth) — pay SEVERAL penalties in ONE deposit.
+ *
+ * The member picks penalties on the payment screen and pays the total once, so
+ * they get a single PawaPay prompt and are charged a single transaction fee.
+ * Settlement marks every penalty paid and routes each per its own
+ * fundsDestination — see the "penalty" branch of settlement.service.js.
+ *
+ * All penalties must belong to the SAME group: one deposit produces one
+ * transaction, and a transaction belongs to one group.
+ */
+router.post(
+  "/penalties/pay",
+  requireAuth,
+  paymentLimiter,
+  asyncHandler(async (req, res) => {
+    const ids = Array.isArray(req.body.penaltyIds) ? req.body.penaltyIds : [];
+    if (!ids.length)
+      return res.status(400).json({ error: "penaltyIds must be a non-empty array" });
+    // Bound the batch: the deposit, the notification and the settlement loop all
+    // scale with this, and no member legitimately owes hundreds at once.
+    if (ids.length > 20)
+      return res.status(400).json({ error: "Cannot pay more than 20 penalties at once" });
+
+    const penalties = await Penalty.find({ _id: { $in: ids } });
+    if (penalties.length !== ids.length)
+      return res.status(404).json({ error: "One or more penalties not found" });
+    if (penalties.some((p) => p.status === "paid"))
+      return res.status(400).json({ error: "One or more penalties are already paid" });
+
+    const groupIds = [...new Set(penalties.map((p) => String(p.groupId)))];
+    if (groupIds.length > 1)
+      return res
+        .status(400)
+        .json({ error: "All penalties must belong to the same group" });
+
+    // Only the penalised member (or a group admin recording it) can pay. Checked
+    // per penalty: a batch must never smuggle in someone else's debt.
+    const notMine = penalties.filter((p) => String(p.memberId) !== String(req.userId));
+    if (notMine.length) {
+      const g = await Group.findById(groupIds[0]).lean();
+      if (!g || !isGroupAdmin(g, req.userId))
+        return res.status(403).json({ error: "Not your penalty" });
+    }
+
+    const total = penalties.reduce((sum, p) => sum + p.amount, 0);
+    if (!(total > 0))
+      return res.status(400).json({ error: "Nothing to pay" });
+
+    const phone = req.body.payerPhone || req.user.phone;
+    const first = penalties[0];
+
+    // Validate the full transaction against the model BEFORE initiating the
+    // deposit — PawaPay must never move money for a request we would reject.
+    const txn = new Transaction({
+      groupId: first.groupId,
+      groupName: first.groupName,
+      memberId: req.userId,
+      memberName: req.user.name,
+      type: "penalty",
+      amount: -total,
+      status: "pending",
+      note:
+        penalties.length === 1
+          ? `Penalty: ${first.reason}`
+          : `${penalties.length} penalties`,
+      receiptId: generateReceiptId("CHM"),
+      meta: { penaltyIds: penalties.map((p) => p._id) },
+    });
+    await txn.validate(); // ValidationError → 400 via the error middleware
+
+    const deposit = await initiateDeposit({
+      amount: total,
+      phone,
+      provider: providerFromPhone(phone),
+      statementDescription: "Chuma penalty",
+    });
+    if (deposit.status === "REJECTED")
+      return res.status(402).json({ error: "Payment rejected" });
+
+    // Penalties are only marked paid (and funds routed) by the settlement
+    // service once the payment reaches COMPLETED — inline below for simulated.
+    txn.pawapay = { depositId: deposit.id, status: deposit.status };
+    if (deposit.simulated) txn.status = "completed";
+    await txn.save();
+
+    if (txn.status === "completed") {
+      await settleCompletedTransaction(txn);
+      const paid = await Penalty.find({ _id: { $in: ids } }).lean();
+      return res.json({ message: "Penalties paid", penalties: paid, transaction: txn });
+    }
+
+    res.json({
+      message: "Penalty payment processing — confirm on your phone",
+      penalties,
+      transaction: txn,
+    });
+  })
+);
+
 // ─── NOTIFICATIONS ──────────────────────────────────────────────────────────
 
 /** GET /api/notifications (auth) */
@@ -455,10 +555,11 @@ router.post(
         error: `Group wallet only holds K${group.walletBalance || 0} — it cannot cover this K${owed} payout yet.`,
       });
 
-    // Re-send the EXACT net that was priced when the original payout was first
-    // created — do NOT re-price. The original (failed) txn already had its fees
-    // deducted: depositAmount = owed − fees. Re-pricing `owed` here would deduct
-    // fees a SECOND time, so the member would receive owed − fees − fees.
+    // Re-send the EXACT amount that was priced when the original payout was
+    // first created — do NOT re-price. depositAmount is what we sent: for a
+    // share-out that is owed − fees (re-pricing would deduct fees a SECOND
+    // time, paying the member owed − fees − fees); for a loan it is the full
+    // principal, since Chuma absorbs the fees there.
     // New txns always carry depositAmount; fall back to `owed` only for OLD
     // failed txns that predate the fee work.
     const sendAmount = failed.depositAmount ?? owed;
@@ -505,10 +606,12 @@ router.post(
       // Carry the original pricing so THIS retry books platform revenue exactly
       // once when it settles: the original FAILED and never settled/booked, so
       // no PlatformRevenue exists for this economic event yet. depositAmount is
-      // the net actually sent; platformFee is booked (guarded per-transactionId
-      // by PlatformRevenue's unique index) when the retry settles.
+      // the amount actually sent; platformFee (earned) and feesAbsorbed (a cost,
+      // booked negative) are booked — guarded per-transactionId by
+      // PlatformRevenue's unique index — when the retry settles.
       depositAmount: failed.depositAmount,
       platformFee: failed.platformFee,
+      feesAbsorbed: failed.feesAbsorbed,
       status: payout.simulated ? "completed" : "pending",
       note:
         failed.type === "loan" ? "Loan disbursed (retry)" : "Cycle share-out (retry)",
