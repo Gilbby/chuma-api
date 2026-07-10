@@ -655,7 +655,13 @@ router.post(
     if (kind === "contribution") {
       // priceContribution does not throw on small amounts — no tooSmall case.
       const { base, platformFee, depositAmount, feesCovered } = priceContribution(
-        { base: amount, ...config.pricing }
+        {
+          base: amount,
+          ...config.pricing,
+          platformFee: config.pricing.platformFeeFor(amount),
+          mnoFee: config.pricing.contributionMnoFee,
+          wholeKwachaOnly: config.pricing.contributionWholeKwacha,
+        }
       );
       return res.json({ base, platformFee, depositAmount, feesCovered });
     }

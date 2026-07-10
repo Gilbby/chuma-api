@@ -249,17 +249,43 @@ router.post(
     const group = req.group;
 
     const normalized = normalizePhone(phone);
-    if (group.members.some((m) => m.phone === normalized && m.status !== "removed"))
-      return res.status(400).json({ error: "This number is already in the group" });
     const invited = await User.findOne({ phone: normalized });
 
-    const result = await Group.updateOne(
-      {
-        _id: group._id,
-        members: {
-          $not: { $elemMatch: { phone: normalized, status: { $ne: "removed" } } },
-        },
+    // Match on identity as well as phone: a member row's stored phone can drift
+    // from the normalized form (the field is optional on memberSchema), and a
+    // phone-only check would then re-invite someone already in the group.
+    const alreadyIn = group.members.find(
+      (m) =>
+        m.status !== "removed" &&
+        (m.phone === normalized ||
+          (invited && m.userId && String(m.userId) === String(invited._id)))
+    );
+    if (alreadyIn)
+      return res.status(400).json({
+        error:
+          alreadyIn.status === "pending"
+            ? "This number has already been invited"
+            : "This number is already a member of this group",
+      });
+
+    const filter = {
+      _id: group._id,
+      members: {
+        $not: { $elemMatch: { phone: normalized, status: { $ne: "removed" } } },
       },
+    };
+    if (invited) {
+      filter.$and = [
+        {
+          members: {
+            $not: { $elemMatch: { userId: invited._id, status: { $ne: "removed" } } },
+          },
+        },
+      ];
+    }
+
+    const result = await Group.updateOne(
+      filter,
       {
         $push: {
           members: {
@@ -309,14 +335,25 @@ router.post(
     const group = await Group.findById(req.params.id);
     if (!group) return res.status(404).json({ error: "Group not found" });
 
+    const mine = group.members.filter(
+      (m) =>
+        (m.userId && String(m.userId) === String(req.userId)) ||
+        m.phone === req.user.phone
+    );
+
+    // A stale invite notification can outlive the invite itself — the user may
+    // have already joined from another device, or been added directly. Accepting
+    // again is a no-op success so the notification can be cleared, not an error.
+    if (mine.some((m) => m.status === "active"))
+      return res.json({
+        message: "Already a member",
+        alreadyMember: true,
+        group: withFeeStatus(group),
+      });
+
     // Only a PENDING invite can be accepted — a member removed by the group's
     // admins must be re-invited, not re-activate themselves.
-    const member = group.members.find(
-      (m) =>
-        ((m.userId && String(m.userId) === String(req.userId)) ||
-          m.phone === req.user.phone) &&
-        m.status === "pending"
-    );
+    const member = mine.find((m) => m.status === "pending");
     if (!member)
       return res.status(404).json({ error: "No invite found for you" });
 
@@ -344,7 +381,7 @@ router.post(
         member.role && member.role !== "Member" ? ` as ${member.role}` : "";
       await Notification.create({
         userId: chairId,
-        type: "invite",
+        type: "invite_accepted",
         title: "Invitation accepted",
         body: `${req.user.name} accepted your invitation and joined ${group.name}${roleSuffix}.`,
         groupId: group._id,

@@ -23,6 +23,11 @@ const mnoFee = (amount) => {
   return 10;
 };
 
+// Contribution platform fee is a PERCENTAGE of the amount (unlike payout flows,
+// which still use the flat `platformFee` below). Rounded to ngwee (2 dp).
+const platformFeeRate = num(process.env.PLATFORM_FEE_RATE, 0.01);
+const platformFeeFor = (amount) => Math.round(amount * platformFeeRate * 100) / 100;
+
 export const config = {
   env: process.env.NODE_ENV || "development",
   port: num(process.env.PORT, 5000),
@@ -83,11 +88,20 @@ export const config = {
   },
 
   pricing: {
-    platformFee: num(process.env.PLATFORM_FEE, 2),
+    platformFee: num(process.env.PLATFORM_FEE, 2), // flat — payout/share-out/loan flows
+    platformRate: platformFeeRate, // percentage — contributions only
+    platformFeeFor, // (amount) => percentage platform fee for a contribution
     pawapayRate: num(process.env.PAWAPAY_RATE, 0.01),
     feesOnEndUser: bool(process.env.PAWAPAY_FEES_ON_END_USER, false), // Model B default
     wholeKwachaOnly: bool(process.env.PAWAPAY_WHOLE_KWACHA_ONLY, true), // safe default for ZMW
     mnoFee, // injected into priceContribution; bands are placeholders (see above)
+
+    // TEMP (testing): price CONTRIBUTIONS as a clean platform% + pawaPay% — no
+    // flat MNO fee, no whole-Kwacha rounding — so the fee reads as ~1% + 1%.
+    // Restore realistic MNO bands + rounding before go-live (see ⚠️ note above).
+    // Payout/share-out/loan flows keep `mnoFee` + `wholeKwachaOnly` untouched.
+    contributionMnoFee: () => 0,
+    contributionWholeKwacha: bool(process.env.CONTRIB_WHOLE_KWACHA, false),
   },
 
   rules: {

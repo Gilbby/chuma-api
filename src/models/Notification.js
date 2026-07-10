@@ -15,7 +15,11 @@ const notificationSchema = new Schema(
         "governance",
         "security",
         "repayment",
+        // "invite" is actionable (accept/decline). The confirmation the inviter
+        // gets back is informational — its own type, so the app never renders it
+        // with Accept/Decline buttons.
         "invite",
+        "invite_accepted",
         "penalty",
         "fee",
         "kyc",

@@ -56,11 +56,11 @@ router.post(
     // pricing.service.js; fee bands come from config so tuning is one file.
     const pricing = priceContribution({
       base: amount,
-      platformFee: config.pricing.platformFee,
+      platformFee: config.pricing.platformFeeFor(amount),
       pawapayRate: config.pricing.pawapayRate,
       feesOnEndUser: config.pricing.feesOnEndUser,
-      mnoFee: config.pricing.mnoFee,
-      wholeKwachaOnly: config.pricing.wholeKwachaOnly,
+      mnoFee: config.pricing.contributionMnoFee,
+      wholeKwachaOnly: config.pricing.contributionWholeKwacha,
     });
     // Breakdown surfaced to the frontend so it can show the real total charged.
     const breakdown = {
