@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import { Penalty } from "../models/Penalty.js";
 import { Group } from "../models/Group.js";
 import { Transaction } from "../models/Transaction.js";
@@ -33,6 +34,7 @@ import {
   handleFailedTransaction,
 } from "../services/settlement.service.js";
 import { priceContribution, pricePayout } from "../services/pricing.service.js";
+import { buildStatement } from "../services/statement.service.js";
 import { config } from "../config/index.js";
 
 const router = express.Router();
@@ -494,6 +496,50 @@ router.get(
       .limit(500)
       .lean();
     res.json({ transactions });
+  })
+);
+
+/**
+ * GET /api/statement?groupId=&from=&to=  (auth)
+ * Bank-style account statement for the caller: opening/closing savings balance
+ * with a running ledger, plus all other activity in the period. `from`/`to` are
+ * ISO dates; they default to the current calendar month. `groupId` is optional
+ * — omitted, the statement spans every group the caller belongs to.
+ */
+router.get(
+  "/statement",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const now = new Date();
+    const from = req.query.from
+      ? new Date(req.query.from)
+      : new Date(now.getFullYear(), now.getMonth(), 1);
+    const to = req.query.to ? new Date(req.query.to) : now;
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()))
+      return res.status(400).json({ error: "Invalid from/to date" });
+    if (from > to)
+      return res.status(400).json({ error: "from must be before to" });
+
+    const { groupId } = req.query;
+    if (groupId) {
+      if (!mongoose.isValidObjectId(groupId))
+        return res.status(400).json({ error: "Valid groupId required" });
+      const group = await Group.findById(groupId).select("members").lean();
+      if (!group) return res.status(404).json({ error: "Group not found" });
+      const member = group.members.find(
+        (m) => String(m.userId) === String(req.userId) && m.status === "active"
+      );
+      if (!member)
+        return res.status(403).json({ error: "Not a member of this group" });
+    }
+
+    const statement = await buildStatement({
+      user: req.user,
+      groupId: groupId || null,
+      from,
+      to,
+    });
+    res.json({ statement });
   })
 );
 
