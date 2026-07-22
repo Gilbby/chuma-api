@@ -13,7 +13,7 @@ import {
   initiatePayout,
   providerFromPhone,
 } from "../services/pawapay.service.js";
-import { priceAbsorbedPayout } from "../services/pricing.service.js";
+import { pricePayout } from "../services/pricing.service.js";
 import { config } from "../config/index.js";
 import { distributeShareOut } from "../services/shareout.service.js";
 import {
@@ -156,58 +156,25 @@ async function executeApproval(approval, req) {
     );
     const phone = member?.phone;
 
-    // The payout draws real money from the merchant float — never disburse
-    // more than the group's wallet holds (it may have drained since the loan
-    // was requested). Record it as a failed, retryable payout so the admins
-    // are notified and can retry once contributions/repayments refill it.
-    const wallet = group?.walletBalance || 0;
-    if (loan.principal > wallet) {
-      const txn = await Transaction.create({
-        groupId: loan.groupId,
-        groupName: loan.groupName,
-        memberId: loan.memberId,
-        memberName: loan.memberName,
-        type: "loan",
-        amount: loan.principal,
-        status: "failed",
-        note: "Loan disbursement blocked — insufficient group wallet",
-        receiptId: generateReceiptId("CHM"),
-        pawapay: {
-          payoutId: uuidv4(), // never sent to PawaPay; keeps retry-payout usable
-          status: "REJECTED",
-          failureReason: JSON.stringify({
-            rejectionReason: "INSUFFICIENT_GROUP_WALLET",
-            message: `Group wallet K${wallet} cannot cover the K${loan.principal} loan`,
-          }),
-        },
-        meta: { loanId: loan._id },
-      });
-      await handleFailedTransaction(txn);
-      return {
-        type: "loan-disbursement-blocked",
-        reason: "insufficient-group-wallet",
-        loanId: loan._id,
-      };
-    }
-
-    // Chuma absorbs the PawaPay % + MNO fee: the borrower receives the FULL
-    // principal, and the platform bears the cost of getting it there. The
-    // platform fee is not charged on a disbursement either. Fees can therefore
-    // never exceed the principal, so there is no "too small after fees" case —
-    // priceAbsorbedPayout only throws on a bad principal or pricing config.
-    // Record that blocked (like the insufficient-wallet path) rather than
-    // crashing the approval executor.
+    // Price the disbursement FIRST (pure, no side effects). The borrower bears
+    // the fees: pawaPay % + e-levy + our 1% are netted OUT of the principal, so
+    // they RECEIVE principal − fees but REPAY the full loan (outstanding, fixed
+    // at request). pricePayout THROWS when fees meet/exceed the principal (a tiny
+    // loan) — record that blocked rather than crash the approval executor.
+    const correspondent = providerFromPhone(phone || "");
     let priced;
     try {
-      priced = priceAbsorbedPayout({
+      priced = pricePayout({
         owed: loan.principal,
-        platformFee: config.pricing.platformFee,
-        pawapayRate: config.pricing.pawapayRate,
+        platformFee: config.pricing.platformFeeFor(loan.principal), // our 1%, netted out
+        pawapayRate: config.pricing.payoutRateFor(correspondent), // 1% Airtel / 2% MTN & Zamtel
         feesOnEndUser: config.pricing.feesOnEndUser,
-        mnoFee: config.pricing.mnoFee,
+        mnoFee: config.pricing.payoutLevyFor(correspondent), // e-levy on MTN payouts only
         wholeKwachaOnly: config.pricing.wholeKwachaOnly,
       });
     } catch {
+      // A pricing failure is permanent (re-pricing fails the same way) — not
+      // retryable, so no transfers to re-send.
       const txn = await Transaction.create({
         groupId: loan.groupId,
         groupName: loan.groupName,
@@ -216,14 +183,14 @@ async function executeApproval(approval, req) {
         type: "loan",
         amount: loan.principal,
         status: "failed",
-        note: "Loan disbursement blocked — could not price the payout",
+        note: "Loan disbursement blocked — fees meet or exceed the principal",
         receiptId: generateReceiptId("CHM"),
         pawapay: {
-          payoutId: uuidv4(), // never sent to PawaPay; keeps retry-payout usable
+          payoutId: uuidv4(),
           status: "REJECTED",
           failureReason: JSON.stringify({
             rejectionReason: "PAYOUT_PRICING_FAILED",
-            message: `Could not price the disbursement of K${loan.principal}`,
+            message: `Fees meet or exceed the K${loan.principal} principal — cannot disburse`,
           }),
         },
         meta: { loanId: loan._id },
@@ -236,11 +203,54 @@ async function executeApproval(approval, req) {
       };
     }
 
-    // Disburse to the member's wallet via PawaPay payout
+    // The payout draws real money from the merchant float — never disburse when
+    // the wallet can't cover the principal (it decrements by the full principal
+    // at settlement, and may have drained since the loan was requested). Record a
+    // failed, RETRYABLE payout (one rejected transfer of the net amount) so admins
+    // are notified and can retry once contributions/repayments refill it.
+    const wallet = group?.walletBalance || 0;
+    if (loan.principal > wallet) {
+      const txn = await Transaction.create({
+        groupId: loan.groupId,
+        groupName: loan.groupName,
+        memberId: loan.memberId,
+        memberName: loan.memberName,
+        type: "loan",
+        amount: loan.principal,
+        depositAmount: priced.netReceived,
+        platformFee: priced.platformFee,
+        status: "failed",
+        note: "Loan disbursement blocked — insufficient group wallet",
+        receiptId: generateReceiptId("CHM"),
+        pawapay: {
+          status: "REJECTED",
+          transfers: [
+            {
+              payoutId: uuidv4(), // never sent to PawaPay; retry re-sends this transfer
+              amount: priced.netReceived,
+              status: "REJECTED",
+              failureReason: JSON.stringify({
+                rejectionReason: "INSUFFICIENT_GROUP_WALLET",
+                message: `Group wallet K${wallet} cannot cover the K${loan.principal} loan`,
+              }),
+            },
+          ],
+        },
+        meta: { loanId: loan._id },
+      });
+      await handleFailedTransaction(txn);
+      return {
+        type: "loan-disbursement-blocked",
+        reason: "insufficient-group-wallet",
+        loanId: loan._id,
+      };
+    }
+
+    // Disburse the NET (principal − fees) to the member's wallet via PawaPay.
     const payout = await initiatePayout({
-      amount: priced.sendAmount,
+      amount: priced.netReceived,
       phone,
-      provider: providerFromPhone(phone || ""),
+      provider: correspondent,
       statementDescription: "Chuma loan",
       metadata: [{ fieldName: "loanId", fieldValue: String(loan._id) }],
     });
@@ -260,23 +270,25 @@ async function executeApproval(approval, req) {
       memberName: loan.memberName,
       type: "loan",
       amount: loan.principal, // full principal — drives circulation/wallet math and repayment
-      depositAmount: priced.sendAmount, // what the borrower actually received (== principal)
-      platformFee: 0, // not charged on a disbursement — Chuma absorbs the cost
-      feesAbsorbed: priced.feesAbsorbed, // platform's cash cost, booked as negative revenue
+      depositAmount: priced.netReceived, // NET the borrower received (principal − fees)
+      platformFee: priced.platformFee, // our 1%, earned (netted out of the principal)
       status: rejected ? "failed" : payout.simulated ? "completed" : "pending",
       note: "Loan disbursed",
       receiptId: generateReceiptId("CHM"),
       pawapay: {
-        payoutId: payout.id,
+        transfers: payout.transfers, // ≥1 transfer; parent settles when all COMPLETE
         status: payout.status,
-        ...(rejected ? { failureReason: JSON.stringify(payout.error) } : {}),
       },
       meta: { loanId: loan._id },
     });
 
     if (rejected) {
       await handleFailedTransaction(txn);
-      return { type: "loan-disbursement-rejected", loanId: loan._id, payoutId: payout.id };
+      return {
+        type: "loan-disbursement-rejected",
+        loanId: loan._id,
+        payoutId: payout.transfers[0]?.payoutId,
+      };
     }
 
     if (loan.memberId) {
@@ -292,13 +304,17 @@ async function executeApproval(approval, req) {
 
     if (txn.status === "completed") {
       await settleCompletedTransaction(txn);
-      return { type: "loan-disbursed", loanId: loan._id, payoutId: payout.id };
+      return {
+        type: "loan-disbursed",
+        loanId: loan._id,
+        payoutId: payout.transfers[0]?.payoutId,
+      };
     }
 
     return {
       type: "loan-disbursement-initiated",
       loanId: loan._id,
-      payoutId: payout.id,
+      payoutId: payout.transfers[0]?.payoutId,
     };
   }
 

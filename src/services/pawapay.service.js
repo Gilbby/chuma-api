@@ -117,26 +117,18 @@ export async function initiateDeposit({
 }
 
 /**
- * Initiate a PAYOUT (send to member).
+ * Send ONE payout transfer (no splitting). Returns a transfer record:
+ *   { payoutId, amount, status, failureReason? }
+ * status: COMPLETED (simulated) / ACCEPTED (live, awaiting callback) / REJECTED.
  */
-export async function initiatePayout({
-  amount,
-  phone,
-  provider,
-  statementDescription = "Chuma payout",
-  metadata = [],
-}) {
+async function sendOneTransfer({ amount, msisdn, correspondent, statementDescription, metadata }) {
   const payoutId = uuidv4();
-  const msisdn = toMsisdn(phone);
-  const correspondent = provider || providerFromPhone(phone);
-
   if (!ENABLED()) {
     console.log(
       `[PAYMENT SIMULATED] PAYOUT ${amount} ${config.rules.currency} to ${msisdn} via ${correspondent}`
     );
-    return { id: payoutId, status: "ACCEPTED", simulated: true };
+    return { payoutId, amount, status: "COMPLETED" };
   }
-
   const body = {
     payoutId,
     amount: String(amount),
@@ -148,15 +140,75 @@ export async function initiatePayout({
     country: config.rules.country,
     metadata,
   };
-
   try {
     const { data } = await client().post("/payouts", body);
-    return { id: payoutId, status: data.status, raw: data };
+    return { payoutId, amount, status: data.status };
   } catch (err) {
     const detail = err?.response?.data || err.message;
     console.error("[PAWAPAY] payout error:", detail);
-    return { id: payoutId, status: "REJECTED", error: detail };
+    return { payoutId, amount, status: "REJECTED", failureReason: JSON.stringify(detail) };
   }
+}
+
+/**
+ * Initiate a PAYOUT (send to member). A payout ABOVE the operator's per-
+ * transaction ceiling is split into ≤ceiling transfers that sum to `amount`
+ * (an account can't receive more than the ceiling in one go — see config
+ * splitForPayout); a normal payout is a single transfer. Returns:
+ *   { status, transfers:[{payoutId, amount, status, failureReason?}], simulated }
+ * where the parent-level `status` the caller records as Transaction.status is:
+ *   REJECTED  — every transfer bounced at initiation (nothing reached PawaPay;
+ *               record failed, fully retryable)
+ *   COMPLETED — simulated (all transfers complete immediately)
+ *   ACCEPTED  — ≥1 transfer accepted; the parent settles when they all COMPLETE
+ *               via the webhook/cron reconciliation (see settlement service).
+ */
+export async function initiatePayout({
+  amount,
+  phone,
+  provider,
+  statementDescription = "Chuma payout",
+  metadata = [],
+}) {
+  const correspondent = provider || providerFromPhone(phone);
+  const msisdn = toMsisdn(phone);
+  const chunks = config.pricing.splitForPayout(amount, correspondent);
+
+  const transfers = [];
+  for (const chunkAmount of chunks) {
+    transfers.push(
+      await sendOneTransfer({ amount: chunkAmount, msisdn, correspondent, statementDescription, metadata })
+    );
+  }
+
+  const simulated = !ENABLED();
+  const allRejected = transfers.every((t) => t.status === "REJECTED");
+  const status = allRejected ? "REJECTED" : simulated ? "COMPLETED" : "ACCEPTED";
+  return { status, transfers, simulated };
+}
+
+/**
+ * Re-send specific transfer amounts (used by retry-payout for the non-COMPLETED
+ * chunks of a partially-failed payout — already ≤ceiling, so NOT re-split).
+ * Returns fresh transfer records (in the same order as `amounts`) to swap into
+ * the parent's pawapay.transfers, plus `simulated`.
+ */
+export async function resendTransfers({
+  amounts,
+  phone,
+  provider,
+  statementDescription = "Chuma payout",
+  metadata = [],
+}) {
+  const correspondent = provider || providerFromPhone(phone);
+  const msisdn = toMsisdn(phone);
+  const transfers = [];
+  for (const amount of amounts) {
+    transfers.push(
+      await sendOneTransfer({ amount, msisdn, correspondent, statementDescription, metadata })
+    );
+  }
+  return { transfers, simulated: !ENABLED() };
 }
 
 /** Poll a deposit's final status. */
@@ -201,6 +253,7 @@ export async function predictProvider(phone) {
 export default {
   initiateDeposit,
   initiatePayout,
+  resendTransfers,
   checkDepositStatus,
   checkPayoutStatus,
   predictProvider,

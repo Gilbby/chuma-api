@@ -51,8 +51,11 @@ const loanRes = await db.collection("loans").insertOne({
 const loanId = loanRes.insertedId;
 const failedRes = await db.collection("transactions").insertOne({
   groupId: oid(GROUP_ID), groupName: "TEST", memberId: oid(USER_ID), memberName: "Gilbert",
-  type: "loan", amount: AMOUNT, status: "failed", note: "Loan disbursed",
-  receiptId: "CHM-TESTFAIL", pawapay: { payoutId: randomUUID(), status: "FAILED" },
+  type: "loan", amount: AMOUNT, status: "failed", note: "Loan disbursed", depositAmount: AMOUNT,
+  receiptId: "CHM-TESTFAIL",
+  // A payout is one or more transfers; this one failed. Retry re-sends the
+  // non-COMPLETED transfers IN PLACE (same transaction, no new one).
+  pawapay: { status: "FAILED", transfers: [{ payoutId: randomUUID(), amount: AMOUNT, status: "FAILED" }] },
   meta: { loanId }, date: new Date(), createdAt: new Date(), updatedAt: new Date(),
 });
 const failedId = failedRes.insertedId;
@@ -79,21 +82,25 @@ try {
     await new Promise((r) => setTimeout(r, 8000));
   }
   const retryOk = status === 200 && body?.transaction;
-  check("retry accepted, new pending txn created", !!retryOk && body.transaction.status === "pending");
+  // Retry is IN PLACE: the same transaction's failed transfers are re-sent, so
+  // it returns to pending (or completes immediately if the provider does).
+  check("retry accepted, payout re-sent in place",
+    !!retryOk && ["pending", "completed"].includes(body.transaction.status));
   retryTxnId = body?.transaction?._id ?? null;
-  check("retry carries meta.loanId + retryOf", !!retryOk &&
-    String(body.transaction.meta?.loanId) === String(loanId) &&
-    String(body.transaction.meta?.retryOf) === String(failedId));
+  check("retry is the SAME txn, still carrying meta.loanId", !!retryOk &&
+    String(body.transaction._id) === String(failedId) &&
+    String(body.transaction.meta?.loanId) === String(loanId));
 
   if (retryOk) {
     const res2 = await fetch(`${API}/api/transactions/${failedId}/retry-payout`, { method: "POST", headers: H });
     const body2 = await res2.json().catch(() => ({}));
     console.log(`second retry: ${res2.status} ${JSON.stringify(body2).slice(0, 100)}`);
-    // 409 = atomic already-retried claim. 400 = the first retry's payout
-    // already settled and activated the loan before this call — normal now
-    // that callbacks land in ~1s. Either way the double-spend was refused.
-    check("second retry rejected (409 already-retried / 400 already-settled)",
-      res2.status === 409 || (res2.status === 400 && /already/i.test(body2?.error || "")));
+    // The first retry flipped it off "failed" (now pending/completed), so a
+    // second attempt is refused: 409 if still mid-retry (retryInProgress claim),
+    // else 400 "Only failed payouts can be retried". Double-spend refused.
+    check("second retry rejected (409 in-progress / 400 no-longer-failed)",
+      res2.status === 409 ||
+      (res2.status === 400 && /only failed|already|being retried/i.test(body2?.error || "")));
 
     const t0 = Date.now();
     while (Date.now() - t0 < 8.5 * 60 * 1000) {

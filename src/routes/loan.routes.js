@@ -27,6 +27,8 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { settleCompletedTransaction } from "../services/settlement.service.js";
+import { pricePayout } from "../services/pricing.service.js";
+import { config } from "../config/index.js";
 
 const router = express.Router();
 
@@ -165,7 +167,33 @@ router.post(
         }))
     );
 
-    res.status(201).json({ loan, approval, breakdown });
+    // Preview what the borrower will actually RECEIVE at disbursement: all fees
+    // (pawaPay % + e-levy + our 1%) are netted out of the principal; they still
+    // repay the full loan (breakdown.totalRepay). pricePayout throws on a tiny
+    // loan where fees ≥ principal — surface that as `tooSmall`, not a 500.
+    let disbursement;
+    try {
+      const corr = providerFromPhone(req.user.phone || "");
+      const p = pricePayout({
+        owed: amount,
+        platformFee: config.pricing.platformFeeFor(amount),
+        pawapayRate: config.pricing.payoutRateFor(corr),
+        feesOnEndUser: config.pricing.feesOnEndUser,
+        mnoFee: config.pricing.payoutLevyFor(corr),
+        wholeKwachaOnly: config.pricing.wholeKwachaOnly,
+      });
+      disbursement = {
+        principal: amount,
+        netReceived: p.netReceived,
+        transactionFee: p.transactionFee, // pawaPay % + e-levy
+        platformFee: p.platformFee, // our 1%
+        totalFees: p.totalFees,
+      };
+    } catch {
+      disbursement = { principal: amount, tooSmall: true };
+    }
+
+    res.status(201).json({ loan, approval, breakdown, disbursement });
   })
 );
 

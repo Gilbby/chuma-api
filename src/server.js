@@ -21,6 +21,7 @@ import { runStatusReconciliation } from "./jobs/statusReconciliation.job.js";
 import authRoutes from "./routes/auth.routes.js";
 import groupRoutes from "./routes/group.routes.js";
 import contributionRoutes from "./routes/contribution.routes.js";
+import paymentRoutes from "./routes/payment.routes.js";
 import loanRoutes from "./routes/loan.routes.js";
 import approvalRoutes from "./routes/approval.routes.js";
 import shareoutRoutes from "./routes/shareout.routes.js";
@@ -91,6 +92,7 @@ app.use("/api/auth", authRoutes);
 // makes "auto-approve KYC, revoke later if the ID is bad" actually revoke access.
 app.use("/api/groups", groupRoutes);
 app.use("/api/contributions", contributionRoutes);
+app.use("/api/payments", paymentRoutes); // unified "pay everything at once" checkout
 app.use("/api/loans", loanRoutes);
 app.use("/api/approvals", approvalRoutes);
 app.use("/api/shareout", shareoutRoutes);

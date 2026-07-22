@@ -19,6 +19,10 @@ const transactionSchema = new Schema(
         "penalty",
         "fee",
         "withdrawal",
+        // One deposit settling several obligations at once (savings + loan
+        // repayment(s) + penalties) — see the "combined" branch of
+        // settlement.service.js. meta carries the full breakdown.
+        "combined",
       ],
       required: true,
     },
@@ -37,6 +41,11 @@ const transactionSchema = new Schema(
     // amount (loan disbursement). Booked as NEGATIVE platform revenue on
     // settlement — a cash cost, the mirror of platformFee.
     feesAbsorbed: { type: Number, default: 0 },
+
+    // networkFee = the member's OWN mobile network charge on a collection (money
+    // in), debited from their wallet by their MMO. Display-only — we never
+    // collect it. Stored so the receipt can show it after payment.
+    networkFee: { type: Number, default: 0 },
 
     contributionType: {
       type: String,
@@ -66,14 +75,31 @@ const transactionSchema = new Schema(
     // transaction's effects once payment completes (see settlement.service.js):
     // penalty:{penaltyId} fee:{months} repayment/loan:{loanId}
     // share-out:{memberSavings}
+    // combined:{ contribution, topup, repayments:[{loanId,amount}], penaltyIds:[] }
     meta: { type: Schema.Types.Mixed },
 
     // PawaPay linkage
     pawapay: {
       depositId: { type: String },
-      payoutId: { type: String },
-      status: { type: String }, // ACCEPTED / COMPLETED / FAILED / REJECTED
+      payoutId: { type: String }, // legacy single-payout linkage (deposits still use depositId)
+      status: { type: String }, // parent aggregate: ACCEPTED / COMPLETED / FAILED / REJECTED
       failureReason: { type: String },
+
+      // Payouts settle as one or more transfers: a large payout is split into
+      // ≤operator-ceiling chunks because an account can't receive more than the
+      // ceiling in one go (see config splitForPayout). The parent transaction
+      // settles ONLY when every transfer COMPLETES; reconciliation (webhook /
+      // cron) marks each transfer by its own payoutId. A normal payout is just
+      // one transfer (N=1). Retry re-sends only the non-COMPLETED transfers.
+      transfers: [
+        {
+          _id: false,
+          payoutId: { type: String },
+          amount: { type: Number },
+          status: { type: String }, // ACCEPTED / COMPLETED / FAILED / REJECTED
+          failureReason: { type: String },
+        },
+      ],
     },
 
     date: { type: Date, default: Date.now },
@@ -87,6 +113,8 @@ transactionSchema.index({ groupId: 1, date: -1 });
 // Webhook lookups by PawaPay id (sparse: most cash/simulated txns have none)
 transactionSchema.index({ "pawapay.depositId": 1 }, { sparse: true });
 transactionSchema.index({ "pawapay.payoutId": 1 }, { sparse: true });
+// Reconciliation looks up the parent payout by an individual transfer's payoutId
+transactionSchema.index({ "pawapay.transfers.payoutId": 1 }, { sparse: true });
 
 export const Transaction = mongoose.model("Transaction", transactionSchema);
 export default Transaction;

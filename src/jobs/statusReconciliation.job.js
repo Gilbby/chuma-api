@@ -21,6 +21,7 @@ import {
 import {
   settleCompletedTransaction,
   handleFailedTransaction,
+  applyPayoutChunkStatus,
 } from "../services/settlement.service.js";
 
 // Grace window: don't poll transactions initiated moments ago — their
@@ -36,6 +37,8 @@ const RECONCILE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const RECONCILE_BATCH_LIMIT = 100;
 
 const FINAL_STATUSES = ["COMPLETED", "FAILED"];
+// A payout transfer is final at any of these (REJECTED = bounced at initiation).
+const TRANSFER_FINAL = ["COMPLETED", "FAILED", "REJECTED"];
 
 // node-cron fires on schedule even if the previous run is still going; a slow
 // PawaPay would stack overlapping sweeps polling the same transactions.
@@ -59,7 +62,7 @@ async function sweep() {
   const maxAgeCutoff = new Date(Date.now() - RECONCILE_MAX_AGE_MS);
   const pawapayLinked = [
     { "pawapay.depositId": { $exists: true, $ne: null } },
-    { "pawapay.payoutId": { $exists: true, $ne: null } },
+    { "pawapay.transfers.0": { $exists: true } }, // payouts: one or more transfers
   ];
 
   const candidates = await Transaction.find({
@@ -91,53 +94,70 @@ async function sweep() {
   };
 
   for (const txn of candidates) {
-    const result = txn.pawapay?.depositId
-      ? await checkDepositStatus(txn.pawapay.depositId)
-      : await checkPayoutStatus(txn.pawapay.payoutId);
+    // ── Deposits: reconcile by their single depositId (unchanged). ──────────
+    if (txn.pawapay?.depositId) {
+      const result = await checkDepositStatus(txn.pawapay.depositId);
+      const status = result?.status;
+      if (!FINAL_STATUSES.includes(status)) {
+        // ACCEPTED / SUBMITTED / PENDING / UNKNOWN — retry next run.
+        counts.stillPending++;
+        continue;
+      }
 
-    const status = result?.status;
-    if (!FINAL_STATUSES.includes(status)) {
-      // ACCEPTED / SUBMITTED / PENDING / UNKNOWN — retry next run.
-      counts.stillPending++;
-      continue;
-    }
-
-    // Same atomic guard as the webhook: only a still-pending transaction can
-    // transition, so a callback landing mid-run makes this a harmless no-op.
-    const updated = await Transaction.findOneAndUpdate(
-      { _id: txn._id, status: "pending" },
-      {
-        status: status === "COMPLETED" ? "completed" : "failed",
-        "pawapay.status": status,
-        ...(status === "FAILED" && result.failureReason
-          ? { "pawapay.failureReason": JSON.stringify(result.failureReason) }
-          : {}),
-      },
-      { new: true }
-    );
-
-    if (!updated) {
-      counts.noOp++;
-      continue;
-    }
-
-    // We won the pending→final flip: apply settlement effects exactly once,
-    // same as the webhook path. Log loudly on error; don't abort the sweep.
-    try {
-      if (status === "COMPLETED") await settleCompletedTransaction(updated);
-      else await handleFailedTransaction(updated);
-    } catch (err) {
-      console.error(
-        `[SETTLEMENT] FAILED to apply effects for txn ${updated._id} (${updated.type}, ${status}):`,
-        err
+      // Same atomic guard as the webhook: only a still-pending transaction can
+      // transition, so a callback landing mid-run makes this a harmless no-op.
+      const updated = await Transaction.findOneAndUpdate(
+        { _id: txn._id, status: "pending" },
+        {
+          status: status === "COMPLETED" ? "completed" : "failed",
+          "pawapay.status": status,
+          ...(status === "FAILED" && result.failureReason
+            ? { "pawapay.failureReason": JSON.stringify(result.failureReason) }
+            : {}),
+        },
+        { new: true }
       );
+      if (!updated) {
+        counts.noOp++;
+        continue;
+      }
+
+      try {
+        if (status === "COMPLETED") await settleCompletedTransaction(updated);
+        else await handleFailedTransaction(updated);
+      } catch (err) {
+        console.error(
+          `[SETTLEMENT] FAILED to apply effects for txn ${updated._id} (${updated.type}, ${status}):`,
+          err
+        );
+      }
+      if (status === "COMPLETED") counts.reconciledCompleted++;
+      else counts.reconciledFailed++;
+      continue;
     }
 
-    if (status === "COMPLETED") {
-      counts.reconciledCompleted++;
-    } else {
-      counts.reconciledFailed++;
+    // ── Payouts: poll each still-in-flight transfer; the shared helper settles
+    // the parent once all its transfers are final (same atomic guard). ───────
+    const transfers = txn.pawapay?.transfers || [];
+    for (const t of transfers) {
+      if (TRANSFER_FINAL.includes(t.status)) continue; // already final — skip
+      const result = await checkPayoutStatus(t.payoutId);
+      const status = result?.status;
+      if (!FINAL_STATUSES.includes(status)) continue; // still in flight — next run
+      try {
+        await applyPayoutChunkStatus(t.payoutId, status, result.failureReason);
+      } catch (err) {
+        console.error(
+          `[SETTLEMENT] FAILED to reconcile payout transfer ${t.payoutId} (txn ${txn._id}):`,
+          err
+        );
+      }
     }
+    // Tally by the parent's resulting state (settled only when all transfers done).
+    const after = await Transaction.findById(txn._id).select("status").lean();
+    if (after?.status === "completed") counts.reconciledCompleted++;
+    else if (after?.status === "failed") counts.reconciledFailed++;
+    else counts.stillPending++;
   }
 
   console.log(

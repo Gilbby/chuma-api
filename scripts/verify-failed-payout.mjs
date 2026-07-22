@@ -97,7 +97,7 @@ try {
   if (executed?.payoutId) {
     const t0 = Date.now();
     while (Date.now() - t0 < 8.5 * 60 * 1000) {
-      txn = await db.collection("transactions").findOne({ "pawapay.payoutId": executed.payoutId });
+      txn = await db.collection("transactions").findOne({ "pawapay.transfers.payoutId": executed.payoutId });
       if (txn && txn.status !== "pending") { finalStatus = txn.status; break; }
       await new Promise((r) => setTimeout(r, 5000));
     }

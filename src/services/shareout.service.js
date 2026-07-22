@@ -157,10 +157,10 @@ export async function distributeShareOut(group) {
     try {
       priced = pricePayout({
         owed: netCash,
-        platformFee: config.pricing.platformFee,
-        pawapayRate: config.pricing.pawapayRate,
+        platformFee: config.pricing.platformFeeFor(netCash), // our 1% platform
+        pawapayRate: config.pricing.payoutRateFor(providerFromPhone(m.phone || "")), // 1% Airtel / 2% MTN
         feesOnEndUser: config.pricing.feesOnEndUser,
-        mnoFee: config.pricing.mnoFee,
+        mnoFee: config.pricing.payoutLevyFor(providerFromPhone(m.phone || "")), // 0 Airtel / e-levy MTN
         wholeKwachaOnly: config.pricing.wholeKwachaOnly,
       });
     } catch {
@@ -200,9 +200,8 @@ export async function distributeShareOut(group) {
       note: "Cycle share-out",
       receiptId: generateReceiptId("CHM"),
       pawapay: {
-        payoutId: payout.id,
+        transfers: payout.transfers, // ≥1 transfer; parent settles when all COMPLETE
         status: payout.status,
-        ...(rejected ? { failureReason: JSON.stringify(payout.error) } : {}),
       },
       meta: { memberSavings: m.savings },
     });
@@ -214,7 +213,8 @@ export async function distributeShareOut(group) {
       appliedToLoan: calc.share - netCash,
       sent: priced.netReceived,
       fees: priced.totalFees,
-      payoutId: payout.id,
+      payoutId: payout.transfers[0]?.payoutId,
+      transfers: payout.transfers.length,
     });
   }
 

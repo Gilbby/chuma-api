@@ -3,6 +3,7 @@ import { Loan } from "../models/Loan.js";
 import { Penalty } from "../models/Penalty.js";
 import { Notification } from "../models/Notification.js";
 import { PlatformRevenue } from "../models/PlatformRevenue.js";
+import { Transaction } from "../models/Transaction.js";
 import { advancePaidThrough } from "./logic.service.js";
 
 /**
@@ -26,47 +27,154 @@ import { advancePaidThrough } from "./logic.service.js";
  *   repayment  → { loanId }
  *   loan       → { loanId }            (disbursement payout)
  *   share-out  → { memberSavings }     (member's savings snapshot at share-out)
+ *   combined   → { contribution, topup, repayments:[{loanId,amount}], penaltyIds:[] }
  */
+
+// ─── Reusable effect helpers ─────────────────────────────────────────────────
+// Each applies ONE kind of side effect with its own atomic guard, so the same
+// logic composes safely whether it settles a single-type transaction or one
+// leg of a "combined" deposit. They never assume they are the whole transaction
+// (no reading of txn.amount for figures) — the caller passes explicit amounts.
+
+/**
+ * Credit a member's savings (regular contribution + any top-up) and roll it up
+ * into the group. $inc avoids the read-modify-write race when members settle
+ * concurrently. Counts as ONE contribution event regardless of top-up.
+ */
+async function creditMemberSavings({ groupId, memberId, amount }) {
+  if (!(amount > 0)) return;
+  await Group.updateOne(
+    { _id: groupId, "members.userId": memberId },
+    {
+      $inc: {
+        "members.$.savings": amount,
+        "members.$.contributions": 1,
+        totalSavings: amount,
+        walletBalance: amount,
+      },
+    }
+  );
+}
+
+/**
+ * Book a collection-side platform fee as a SIDE record only — it is never
+ * pooled and touches no group/wallet/savings figure. PlatformRevenue's
+ * unique+sparse transactionId index makes this exactly-once: a replayed
+ * callback / cron double-fire hits a duplicate key (11000), which we swallow.
+ * One transaction books at most one platform-fee record, so combined deposits
+ * (many obligations, one fee) still book exactly once.
+ */
+async function bookCollectionPlatformFee(txn) {
+  if (!(txn.platformFee > 0)) return;
+  try {
+    await PlatformRevenue.create({
+      groupId: txn.groupId,
+      transactionId: txn._id,
+      userId: txn.memberId, // the payer this txn carries
+      amount: txn.platformFee,
+      source: "contribution",
+      currency: "ZMW",
+    });
+  } catch (err) {
+    if (err?.code !== 11000) throw err;
+  }
+}
+
+/**
+ * Settle a batch of penalties in ONE pass. Atomic claim (status → paid) PER
+ * penalty: two payment transactions for the same penalty settling concurrently
+ * must credit the pool exactly once — a read-check-save would let both pass the
+ * "already paid" check. Each claim is independent, so a partially-claimed batch
+ * still credits the rest exactly once rather than skipping them.
+ */
+async function settlePenaltyBatch({ groupId, penaltyIds }) {
+  let pooled = 0;
+  for (const id of penaltyIds) {
+    const penalty = await Penalty.findOneAndUpdate(
+      { _id: id, status: { $ne: "paid" } },
+      { status: "paid" }
+    );
+    if (!penalty) continue; // missing or already settled
+    // Route funds: group pool adds to walletBalance/totalSavings.
+    if (penalty.fundsDestination === "group-pool") pooled += penalty.amount;
+  }
+  // One write for the whole batch rather than one per penalty.
+  if (pooled > 0) {
+    await Group.findByIdAndUpdate(groupId, {
+      $inc: { walletBalance: pooled, totalSavings: pooled },
+    });
+  }
+}
+
+/**
+ * Apply ONE loan repayment of `amount` against `loanId`. CAS on outstanding:
+ * clamp against the balance we read, and only apply if it hasn't moved — two
+ * repayments settling concurrently must never double-advance the due date or
+ * push the balance below zero.
+ */
+async function applyLoanRepayment({ loanId, amount }) {
+  let loan = null;
+  let payAmount = 0;
+  for (let attempt = 0; attempt < 5 && !loan; attempt++) {
+    const current = await Loan.findById(loanId).lean();
+    if (!current) return;
+    payAmount = Math.min(Math.abs(amount), current.outstanding);
+    if (payAmount <= 0) return;
+    loan = await Loan.findOneAndUpdate(
+      { _id: current._id, outstanding: current.outstanding },
+      {
+        $inc: { outstanding: -payAmount, installmentsPaid: 1 },
+        $push: { history: { amount: payAmount, type: "repayment" } },
+      },
+      { new: true }
+    );
+  }
+  if (!loan) {
+    console.error(`[SETTLEMENT] repayment CAS exhausted for loan ${loanId}`);
+    return;
+  }
+  if (loan.outstanding <= 0) {
+    await Loan.updateOne(
+      { _id: loan._id },
+      { $set: { outstanding: 0, status: "repaid" } }
+    );
+    loan.outstanding = 0;
+  } else if (loan.installmentsPaid < loan.totalInstallments) {
+    // Still outstanding and within term: advance the due date one month
+    const next = new Date(loan.nextDueDate || Date.now());
+    next.setMonth(next.getMonth() + 1);
+    await Loan.updateOne({ _id: loan._id }, { $set: { nextDueDate: next } });
+  }
+
+  // Atomic $inc/$set on the group: a full-document save() here writes a
+  // stale absolute walletBalance over any concurrent settlement's $inc.
+  await Group.updateOne(
+    { _id: loan.groupId },
+    {
+      $inc: { loanCirculation: -payAmount, walletBalance: payAmount },
+      ...(loan.memberId
+        ? { $set: { "members.$[m].loanActive": loan.outstanding } }
+        : {}),
+    },
+    loan.memberId ? { arrayFilters: [{ "m.userId": loan.memberId }] } : {}
+  );
+  await Group.updateOne(
+    { _id: loan.groupId, loanCirculation: { $lt: 0 } },
+    { $set: { loanCirculation: 0 } }
+  );
+}
 
 export async function settleCompletedTransaction(txn) {
   switch (txn.type) {
     case "contribution": {
-      const amount = Math.abs(txn.amount);
-      // $inc avoids the read-modify-write race when members settle concurrently
-      await Group.updateOne(
-        { _id: txn.groupId, "members.userId": txn.memberId },
-        {
-          $inc: {
-            "members.$.savings": amount,
-            "members.$.contributions": 1,
-            totalSavings: amount,
-            walletBalance: amount,
-          },
-        }
-      );
-
-      // Book the platform fee as a SIDE record only — it is never pooled and
-      // touches no group/wallet/savings figure. Runs inside this branch so it
-      // inherits the caller's exactly-once pending→final guard: it books once
-      // when the transaction settles, and PlatformRevenue's unique+sparse
-      // transactionId index blocks any replayed callback / cron double-fire.
-      if (txn.platformFee && txn.platformFee > 0) {
-        try {
-          await PlatformRevenue.create({
-            groupId: txn.groupId,
-            transactionId: txn._id,
-            userId: txn.memberId, // the payer this txn carries
-            amount: txn.platformFee,
-            source: "contribution",
-            currency: "ZMW",
-          });
-        } catch (err) {
-          // Duplicate key (11000) = this txn's revenue was ALREADY booked by a
-          // prior settlement (replayed callback / cron double-fire). That's the
-          // exactly-once guard working — swallow it. Re-throw anything else.
-          if (err?.code !== 11000) throw err;
-        }
-      }
+      await creditMemberSavings({
+        groupId: txn.groupId,
+        memberId: txn.memberId,
+        amount: Math.abs(txn.amount),
+      });
+      // Runs inside this branch so it inherits the caller's exactly-once
+      // pending→final guard (see bookCollectionPlatformFee).
+      await bookCollectionPlatformFee(txn);
       return;
     }
 
@@ -81,30 +189,29 @@ export async function settleCompletedTransaction(txn) {
           ? [txn.meta.penaltyId]
           : [];
       if (!ids.length) return;
+      await settlePenaltyBatch({ groupId: txn.groupId, penaltyIds: ids });
+      return;
+    }
 
-      // Atomic claim (status → paid) PER penalty: two payment transactions for
-      // the same penalty settling concurrently must credit the pool exactly
-      // once — a read-check-save here would let both pass the "already paid"
-      // check. Each claim is independent, so a partially-claimed batch (one
-      // penalty already settled by another txn) still credits the rest exactly
-      // once rather than skipping them.
-      let pooled = 0;
-      for (const id of ids) {
-        const penalty = await Penalty.findOneAndUpdate(
-          { _id: id, status: { $ne: "paid" } },
-          { status: "paid" }
-        );
-        if (!penalty) continue; // missing or already settled
-        // Route funds: group pool adds to walletBalance/totalSavings.
-        if (penalty.fundsDestination === "group-pool") pooled += penalty.amount;
+    case "combined": {
+      // One deposit settling several obligations at once. Each leg reuses the
+      // same atomic helper as its single-type counterpart, so exactly-once
+      // still holds per leg; the one platform fee books once for the whole txn.
+      const m = txn.meta || {};
+      const savings =
+        (Number(m.contribution) || 0) + (Number(m.topup) || 0);
+      await creditMemberSavings({
+        groupId: txn.groupId,
+        memberId: txn.memberId,
+        amount: savings,
+      });
+      for (const r of m.repayments || []) {
+        if (r?.loanId) await applyLoanRepayment({ loanId: r.loanId, amount: r.amount });
       }
-
-      // One write for the whole batch rather than one per penalty.
-      if (pooled > 0) {
-        await Group.findByIdAndUpdate(txn.groupId, {
-          $inc: { walletBalance: pooled, totalSavings: pooled },
-        });
-      }
+      const penaltyIds = m.penaltyIds?.length ? m.penaltyIds : [];
+      if (penaltyIds.length)
+        await settlePenaltyBatch({ groupId: txn.groupId, penaltyIds });
+      await bookCollectionPlatformFee(txn);
       return;
     }
 
@@ -132,60 +239,7 @@ export async function settleCompletedTransaction(txn) {
 
     case "repayment": {
       if (!txn.meta?.loanId) return;
-      // CAS on outstanding: clamp against the balance we read, and only apply
-      // if it hasn't moved — two repayments settling concurrently must never
-      // double-advance the due date or push the balance below zero.
-      let loan = null;
-      let payAmount = 0;
-      for (let attempt = 0; attempt < 5 && !loan; attempt++) {
-        const current = await Loan.findById(txn.meta.loanId).lean();
-        if (!current) return;
-        payAmount = Math.min(Math.abs(txn.amount), current.outstanding);
-        if (payAmount <= 0) return;
-        loan = await Loan.findOneAndUpdate(
-          { _id: current._id, outstanding: current.outstanding },
-          {
-            $inc: { outstanding: -payAmount, installmentsPaid: 1 },
-            $push: { history: { amount: payAmount, type: "repayment" } },
-          },
-          { new: true }
-        );
-      }
-      if (!loan) {
-        console.error(
-          `[SETTLEMENT] repayment CAS exhausted for loan ${txn.meta.loanId} (txn ${txn._id})`
-        );
-        return;
-      }
-      if (loan.outstanding <= 0) {
-        await Loan.updateOne(
-          { _id: loan._id },
-          { $set: { outstanding: 0, status: "repaid" } }
-        );
-        loan.outstanding = 0;
-      } else if (loan.installmentsPaid < loan.totalInstallments) {
-        // Still outstanding and within term: advance the due date one month
-        const next = new Date(loan.nextDueDate || Date.now());
-        next.setMonth(next.getMonth() + 1);
-        await Loan.updateOne({ _id: loan._id }, { $set: { nextDueDate: next } });
-      }
-
-      // Atomic $inc/$set on the group: a full-document save() here writes a
-      // stale absolute walletBalance over any concurrent settlement's $inc.
-      await Group.updateOne(
-        { _id: loan.groupId },
-        {
-          $inc: { loanCirculation: -payAmount, walletBalance: payAmount },
-          ...(loan.memberId
-            ? { $set: { "members.$[m].loanActive": loan.outstanding } }
-            : {}),
-        },
-        loan.memberId ? { arrayFilters: [{ "m.userId": loan.memberId }] } : {}
-      );
-      await Group.updateOne(
-        { _id: loan.groupId, loanCirculation: { $lt: 0 } },
-        { $set: { loanCirculation: 0 } }
-      );
+      await applyLoanRepayment({ loanId: txn.meta.loanId, amount: txn.amount });
       return;
     }
 
@@ -224,20 +278,20 @@ export async function settleCompletedTransaction(txn) {
         { $set: { walletBalance: 0 } }
       );
 
-      // The borrower received the full principal, so Chuma paid the PawaPay +
-      // MNO fee. Book that as NEGATIVE platform revenue — a cash cost, not a
-      // charge to anyone. A SIDE record only: it touches no group/wallet/
+      // The borrower bore the fees (netted OUT of the principal), so our 1%
+      // platform fee is EARNED revenue — booked positive, source "payout", the
+      // same as a share-out. A SIDE record only: it touches no group/wallet/
       // loanCirculation/loan/member figure. Runs inside this branch so it
       // inherits the caller's exactly-once pending→final guard: it books once
       // when the disbursement settles, and PlatformRevenue's unique+sparse
       // transactionId index blocks any replayed callback / cron double-fire.
-      if (txn.feesAbsorbed && txn.feesAbsorbed > 0) {
+      if (txn.platformFee && txn.platformFee > 0) {
         try {
           await PlatformRevenue.create({
             groupId: txn.groupId,
             transactionId: txn._id,
-            userId: txn.memberId, // the borrower — who the cost was incurred for
-            amount: -txn.feesAbsorbed,
+            userId: txn.memberId, // the borrower
+            amount: txn.platformFee,
             source: "payout",
             currency: "ZMW",
           });
@@ -250,11 +304,13 @@ export async function settleCompletedTransaction(txn) {
       }
 
       if (loan.memberId) {
+        const net = txn.depositAmount ?? loan.principal;
+        const fees = Math.max(0, loan.principal - net);
         await Notification.create({
           userId: loan.memberId,
           type: "loan",
           title: "Loan disbursed",
-          body: `Your loan of K${loan.principal} has been sent to your mobile wallet.`,
+          body: `Your K${loan.principal} loan was sent to your mobile wallet as K${net}${fees > 0 ? ` (K${fees.toFixed(2)} in fees)` : ""}. You repay K${loan.outstanding}.`,
           groupId: loan.groupId,
           groupName: loan.groupName,
         });
@@ -338,6 +394,7 @@ const FAIL_LABELS = {
   repayment: "loan repayment",
   loan: "loan disbursement",
   "share-out": "share-out payout",
+  combined: "payment",
 };
 
 // Notification.type enum has no generic "payment"; reuse the closest type.
@@ -348,6 +405,7 @@ const FAIL_NOTIF_TYPE = {
   repayment: "repayment",
   loan: "loan",
   "share-out": "governance",
+  combined: "contribution",
 };
 
 /**
@@ -398,4 +456,80 @@ export async function handleFailedTransaction(txn) {
   }
 }
 
-export default { settleCompletedTransaction, handleFailedTransaction };
+const PAYOUT_FINAL = ["COMPLETED", "FAILED", "REJECTED"];
+
+/**
+ * Reconcile ONE payout transfer's final status (COMPLETED / FAILED) into its
+ * parent transaction. A payout can be several transfers — a large amount is
+ * split into ≤operator-ceiling chunks (see pawapay.service) — and the parent
+ * settles ONLY when EVERY transfer COMPLETES.
+ *
+ * Shared by the webhook and the reconciliation cron. Two atomic layers keep it
+ * exactly-once under concurrent transfer callbacks:
+ *   1. mark THIS transfer final — guarded on it being non-final (so a replayed
+ *      callback is a no-op);
+ *   2. once no transfer is still in flight: if ALL COMPLETED, flip the parent
+ *      pending→completed and settle once; if ≥1 failed, flip pending→failed and
+ *      notify once. The parent flip is guarded on status:"pending", so only one
+ *      transfer's callback ever applies the effects.
+ *
+ * Returns "applied" | "chunk-marked" | "no-op".
+ */
+export async function applyPayoutChunkStatus(payoutId, status, failureReason) {
+  if (!payoutId || typeof payoutId !== "string") return "no-op";
+  if (status !== "COMPLETED" && status !== "FAILED") return "no-op";
+
+  // 1) Atomically mark this transfer final — only if it isn't already (the
+  // positional `$` targets the element the $elemMatch found). A replay for an
+  // already-final transfer matches nothing → parent is null → no-op.
+  const parent = await Transaction.findOneAndUpdate(
+    { "pawapay.transfers": { $elemMatch: { payoutId, status: { $nin: PAYOUT_FINAL } } } },
+    {
+      $set: {
+        "pawapay.transfers.$.status": status,
+        ...(failureReason
+          ? { "pawapay.transfers.$.failureReason": JSON.stringify(failureReason) }
+          : {}),
+      },
+    },
+    { new: true }
+  );
+  if (!parent) return "no-op";
+
+  const transfers = parent.pawapay?.transfers || [];
+  if (transfers.some((t) => !PAYOUT_FINAL.includes(t.status))) return "chunk-marked"; // still in flight
+
+  const allCompleted = transfers.every((t) => t.status === "COMPLETED");
+  // Surface a parent-level failure reason (the first failed transfer's) so the
+  // UI and admin "retry" notifications read it where the single-payout field was.
+  const failReason = allCompleted
+    ? null
+    : transfers.find((t) => t.status !== "COMPLETED" && t.failureReason)?.failureReason;
+  const won = await Transaction.findOneAndUpdate(
+    { _id: parent._id, status: "pending" },
+    {
+      status: allCompleted ? "completed" : "failed",
+      "pawapay.status": allCompleted ? "COMPLETED" : "FAILED",
+      ...(failReason ? { "pawapay.failureReason": failReason } : {}),
+    },
+    { new: true }
+  );
+  if (!won) return "no-op"; // another transfer's callback already finalised the parent
+
+  try {
+    if (allCompleted) await settleCompletedTransaction(won);
+    else await handleFailedTransaction(won);
+  } catch (err) {
+    console.error(
+      `[SETTLEMENT] FAILED to apply effects for txn ${won._id} (${won.type}, ${allCompleted ? "COMPLETED" : "FAILED"}):`,
+      err
+    );
+  }
+  return "applied";
+}
+
+export default {
+  settleCompletedTransaction,
+  handleFailedTransaction,
+  applyPayoutChunkStatus,
+};

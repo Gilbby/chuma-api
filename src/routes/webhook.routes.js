@@ -7,6 +7,7 @@ import { verifyPawaPayCallbackMiddleware } from "../middleware/pawapaySignature.
 import {
   settleCompletedTransaction,
   handleFailedTransaction,
+  applyPayoutChunkStatus,
 } from "../services/settlement.service.js";
 import {
   verifyWebhookSignature as verifyDiditSignature,
@@ -104,12 +105,10 @@ router.post(
   express.json(),
   asyncHandler(async (req, res) => {
     const { payoutId, status, failureReason } = req.body || {};
-    const result = await applyFinalStatus(
-      "pawapay.payoutId",
-      payoutId,
-      status,
-      failureReason
-    );
+    // A payout can be several transfers (large amounts are split into
+    // ≤ceiling chunks). Mark THIS transfer; the parent settles only once all
+    // its transfers COMPLETE. payoutId here is the individual transfer's id.
+    const result = await applyPayoutChunkStatus(payoutId, status, failureReason);
     console.log(`[WEBHOOK] payout ${payoutId} → ${status} (${result})`);
     res.status(200).json({ received: true });
   })

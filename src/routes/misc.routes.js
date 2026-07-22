@@ -24,11 +24,14 @@ import {
 } from "../services/logic.service.js";
 import {
   initiateDeposit,
-  initiatePayout,
+  resendTransfers,
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { issuePenalty } from "../services/penalty.service.js";
-import { settleCompletedTransaction } from "../services/settlement.service.js";
+import {
+  settleCompletedTransaction,
+  handleFailedTransaction,
+} from "../services/settlement.service.js";
 import { priceContribution, pricePayout } from "../services/pricing.service.js";
 import { config } from "../config/index.js";
 
@@ -511,7 +514,7 @@ router.post(
     if (
       !failed ||
       !["loan", "share-out"].includes(failed.type) ||
-      !failed.pawapay?.payoutId
+      !failed.pawapay?.transfers?.length
     )
       return res.status(404).json({ error: "Failed payout not found" });
     if (failed.status !== "failed")
@@ -555,78 +558,73 @@ router.post(
         error: `Group wallet only holds K${group.walletBalance || 0} — it cannot cover this K${owed} payout yet.`,
       });
 
-    // Re-send the EXACT amount that was priced when the original payout was
-    // first created — do NOT re-price. depositAmount is what we sent: for a
-    // share-out that is owed − fees (re-pricing would deduct fees a SECOND
-    // time, paying the member owed − fees − fees); for a loan it is the full
-    // principal, since Chuma absorbs the fees there.
-    // New txns always carry depositAmount; fall back to `owed` only for OLD
-    // failed txns that predate the fee work.
-    const sendAmount = failed.depositAmount ?? owed;
+    // Only the transfers that did NOT complete are re-sent. A large payout is
+    // split into ≤ceiling chunks; any chunk that already COMPLETED delivered
+    // real money we must NEVER send twice. Chunks are already ≤ceiling, so they
+    // are not re-split, and NOT re-priced — we resend the exact amounts first
+    // sent (re-pricing would deduct fees a second time).
+    const toResend = failed.pawapay.transfers.filter((t) => t.status !== "COMPLETED");
+    if (!toResend.length)
+      return res
+        .status(400)
+        .json({ error: "All transfers already completed — nothing to retry" });
 
-    // Claim the failed transaction before sending any money.
+    // Claim the payout before sending any money, so a double-tap can't re-send
+    // the failed chunks twice.
     const claimed = await Transaction.findOneAndUpdate(
-      { _id: failed._id, status: "failed", "meta.retriedBy": { $exists: false } },
-      { "meta.retriedBy": "in-progress" },
+      { _id: failed._id, status: "failed", "meta.retryInProgress": { $ne: true } },
+      { $set: { "meta.retryInProgress": true } },
       { new: true }
     );
     if (!claimed)
-      return res.status(409).json({ error: "This payout was already retried" });
+      return res.status(409).json({ error: "This payout is already being retried" });
 
-    const payout = await initiatePayout({
-      amount: sendAmount,
+    const { transfers: resent } = await resendTransfers({
+      amounts: toResend.map((t) => t.amount),
       phone: member.phone,
       provider: providerFromPhone(member.phone),
-      statementDescription:
-        failed.type === "loan" ? "Chuma loan" : "Chuma share out",
+      statementDescription: failed.type === "loan" ? "Chuma loan" : "Chuma share out",
       metadata: failed.meta?.loanId
         ? [{ fieldName: "loanId", fieldValue: String(failed.meta.loanId) }]
         : [],
     });
-    if (payout.status === "REJECTED") {
-      // Release the claim so the admin can try again later.
-      await Transaction.updateOne(
-        { _id: failed._id },
-        { $unset: { "meta.retriedBy": "" } }
-      );
-      return res
-        .status(402)
-        .json({ error: "Payout rejected", detail: payout.error });
-    }
 
-    const baseMeta = { ...(failed.meta || {}) };
-    delete baseMeta.retriedBy;
-    const retry = await Transaction.create({
-      groupId: failed.groupId,
-      groupName: failed.groupName,
-      memberId: failed.memberId,
-      memberName: failed.memberName,
-      type: failed.type,
-      amount: owed, // positive, full owed — settlement math drives off this
-      // Carry the original pricing so THIS retry books platform revenue exactly
-      // once when it settles: the original FAILED and never settled/booked, so
-      // no PlatformRevenue exists for this economic event yet. depositAmount is
-      // the amount actually sent; platformFee (earned) and feesAbsorbed (a cost,
-      // booked negative) are booked — guarded per-transactionId by
-      // PlatformRevenue's unique index — when the retry settles.
-      depositAmount: failed.depositAmount,
-      platformFee: failed.platformFee,
-      feesAbsorbed: failed.feesAbsorbed,
-      status: payout.simulated ? "completed" : "pending",
-      note:
-        failed.type === "loan" ? "Loan disbursed (retry)" : "Cycle share-out (retry)",
-      receiptId: generateReceiptId("CHM"),
-      pawapay: { payoutId: payout.id, status: payout.status },
-      meta: { ...baseMeta, retryOf: failed._id },
-    });
-    await Transaction.updateOne(
+    // Rebuild transfers[] IN PLACE: keep the COMPLETED chunks, swap each
+    // non-completed one for its fresh re-sent record (both lists are in the same
+    // original order). The parent never settled/booked while it was failed, so
+    // when it finally COMPLETES its platform revenue books exactly once (guarded
+    // by PlatformRevenue's unique transactionId index) — no new transaction.
+    let k = 0;
+    const merged = failed.pawapay.transfers.map((t) =>
+      t.status === "COMPLETED"
+        ? { payoutId: t.payoutId, amount: t.amount, status: "COMPLETED" }
+        : resent[k++]
+    );
+    const FINAL = ["COMPLETED", "FAILED", "REJECTED"];
+    const allCompleted = merged.every((t) => t.status === "COMPLETED");
+    const anyInFlight = merged.some((t) => !FINAL.includes(t.status));
+    const newStatus = allCompleted ? "completed" : anyInFlight ? "pending" : "failed";
+
+    const updated = await Transaction.findOneAndUpdate(
       { _id: failed._id },
-      { "meta.retriedBy": retry._id }
+      {
+        $set: {
+          "pawapay.transfers": merged,
+          status: newStatus,
+          "pawapay.status": allCompleted ? "COMPLETED" : anyInFlight ? "ACCEPTED" : "FAILED",
+        },
+        $unset: { "meta.retryInProgress": "" },
+      },
+      { new: true }
     );
 
-    if (retry.status === "completed") await settleCompletedTransaction(retry);
+    // No transfer left in flight → finalise inline: simulated completes now, or
+    // an all-rejected retry has failed again (re-retryable). Otherwise the
+    // accepted transfers settle the parent via webhook/cron reconciliation.
+    if (newStatus === "completed") await settleCompletedTransaction(updated);
+    else if (newStatus === "failed") await handleFailedTransaction(updated);
 
-    res.json({ transaction: retry });
+    res.json({ transaction: updated });
   })
 );
 
@@ -659,18 +657,26 @@ router.post(
           base: amount,
           ...config.pricing,
           platformFee: config.pricing.platformFeeFor(amount),
-          mnoFee: config.pricing.contributionMnoFee,
+          mnoFee: config.pricing.collectionFeeFor(providerFromPhone(req.user.phone || "")),
           wholeKwachaOnly: config.pricing.contributionWholeKwacha,
         }
       );
-      return res.json({ base, platformFee, depositAmount, feesCovered });
+      // networkFee = the member's OWN network charge (display-only) for the review tab.
+      const networkFee = config.pricing.customerFeeFor(providerFromPhone(req.user.phone || ""))(amount);
+      return res.json({ base, platformFee, depositAmount, feesCovered, networkFee });
     }
 
     // kind === "payout": pricePayout THROWS when fees meet/exceed the amount
     // (tiny payouts). Surface that as a graceful 200 the UI can render, not a 500.
     try {
       const { owed, platformFee, transactionFee, totalFees, netReceived } =
-        pricePayout({ owed: amount, ...config.pricing });
+        pricePayout({
+          owed: amount,
+          ...config.pricing,
+          pawapayRate: config.pricing.payoutRateFor(providerFromPhone(req.user.phone || "")),
+          mnoFee: config.pricing.payoutLevyFor(providerFromPhone(req.user.phone || "")),
+          platformFee: config.pricing.platformFeeFor(amount),
+        });
       return res.json({ owed, platformFee, transactionFee, totalFees, netReceived });
     } catch {
       return res.json({ tooSmall: true, reason: "amount too small after fees" });

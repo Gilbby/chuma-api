@@ -6,21 +6,170 @@ const bool = (v, def = false) =>
 const num = (v, def) => (v === undefined ? def : Number(v));
 
 /**
- * MNO (mobile network operator) fee estimate, in Kwacha, for a deposit of the
- * given Kwacha amount.
+ * Fees (Zambia) — pawaPay MERCHANT charges (per pawapay.io/fees) plus our 1%
+ * platform. TOTAL charge = pawaPay's fee + 1% platform. This is the ONE place
+ * fee bands live — tune here, never in the routes. Everything is per-operator,
+ * keyed by the PawaPay correspondent code providerFromPhone() returns.
  *
- * ⚠️ PLACEHOLDER BANDS — THESE NUMBERS ARE ESTIMATES, NOT REAL TARIFFS. ⚠️
- * They exist only so the gross-up math has something to solve against before we
- * have production data. Replace the tiers below with the real Zambia MNO
- * withdrawal/cash-out schedule from the live PawaPay dashboard before go-live.
- * This is the ONE place fee bands live — tune here, never in the routes.
+ *   • Collections (money IN): pawaPay charges a flat MMO fee (per operator) + 1%.
+ *       mnoFee = collectionFeeFor(correspondent);  pawapayRate = 1% (collections).
+ *   • Disbursements (money OUT): Airtel = 1%; MTN = 2% + e-levy; Zamtel = 2%.
+ *       pawapayRate = payoutRateFor(correspondent) (1% Airtel / 2% MTN & Zamtel);
+ *       mnoFee = payoutLevyFor(correspondent) — the e-levy, MTN ONLY (0 otherwise).
+ *   • pawaPay also lists a separate "fees paid by your customers" (a small MMO
+ *     charge the member's OWN wallet bears) — NOT included here: it doesn't reduce
+ *     our settlement, it's the member's direct cost. See note if we ever surface it.
+ *
+ * Payout receive ceiling: an account can't receive more than PAYOUT_CEILING in
+ * one transfer, so larger payouts are SPLIT (see splitForPayout). The MTN e-levy
+ * is per-TRANSACTION, so on a split payout it STACKS per chunk; the % base is
+ * linear (handled by pawapayRate) and needs no stacking.
+ *
+ * ⚠️ pawapay.io/fees is pawaPay's STANDARD public pricing — confirm against your
+ *    merchant dashboard's active rates before go-live.
  */
-const mnoFee = (amount) => {
-  if (amount <= 50) return 1;
-  if (amount <= 150) return 2;
-  if (amount <= 500) return 4;
-  if (amount <= 1000) return 7;
-  return 10;
+
+const bandFee = (bands, amount) =>
+  (bands.find((b) => amount <= b.upTo) || bands[bands.length - 1]).fee;
+
+// ── COLLECTIONS: flat MMO fee pawaPay adds to its 1%, per operator ──
+const AIRTEL_COLLECTION = [
+  // amount ≤ upTo (ZMW)  →  flat fee (ZMW), on top of pawaPay's 1%
+  { upTo: 150, fee: 0.5 },
+  { upTo: 500, fee: 1 },
+  { upTo: 1000, fee: 1.5 },
+  { upTo: 3000, fee: 2.8 },
+  { upTo: 5000, fee: 4 },
+  { upTo: Infinity, fee: 5.5 },
+];
+const MTN_COLLECTION = [
+  { upTo: 150, fee: 0.42 },
+  { upTo: 300, fee: 0.9 },
+  { upTo: 500, fee: 0.8 },
+  { upTo: 1000, fee: 1 },
+  { upTo: 3000, fee: 2.2 },
+  { upTo: 5000, fee: 3 },
+  { upTo: Infinity, fee: 4 },
+];
+const ZAMTEL_COLLECTION = [
+  { upTo: 150, fee: 0.42 },
+  { upTo: 300, fee: 0.8 },
+  { upTo: 500, fee: 0.9 },
+  { upTo: 1000, fee: 1 },
+  { upTo: 3000, fee: 2 },
+  { upTo: 5000, fee: 3 },
+  { upTo: 10000, fee: 4 },
+  { upTo: Infinity, fee: 5 },
+];
+const COLLECTION_BY_OPERATOR = {
+  AIRTEL_OAPI_ZMB: AIRTEL_COLLECTION,
+  MTN_MOMO_ZMB: MTN_COLLECTION,
+  ZAMTEL_ZMB: ZAMTEL_COLLECTION,
+};
+
+// mnoFee for a CONTRIBUTION: pawaPay's flat collection fee (the 1% is pawapayRate).
+const collectionFeeFor = (correspondent) => {
+  const bands = COLLECTION_BY_OPERATOR[correspondent] || MTN_COLLECTION;
+  return (amount) => bandFee(bands, amount);
+};
+
+// ── "Fees paid by your customers": the MMO's OWN charge to the MEMBER's wallet
+// on a COLLECTION (money in), separate from our merchant fee above. We never
+// collect it — it's shown to the member as a heads-up (receipt / review tab).
+// Disbursements are "No fees" to receive, so this only applies to money IN.
+const AIRTEL_CUSTOMER_COLLECTION = [
+  { upTo: 500, fee: 2 },
+  { upTo: 10000, fee: 5 },
+];
+const MTN_CUSTOMER_COLLECTION = [
+  { upTo: 150, fee: 2.16 },
+  { upTo: 300, fee: 2.2 },
+  { upTo: 500, fee: 2.4 },
+  { upTo: 1000, fee: 6 },
+  { upTo: 3000, fee: 6.6 },
+  { upTo: 5000, fee: 7 },
+  { upTo: 10000, fee: 8 },
+];
+const ZAMTEL_CUSTOMER_COLLECTION = [
+  { upTo: 150, fee: 0.08 },
+  { upTo: 300, fee: 0.1 },
+  { upTo: 500, fee: 0.2 },
+  { upTo: 1000, fee: 0.5 },
+  { upTo: 3000, fee: 0.8 },
+  { upTo: 5000, fee: 1 },
+  { upTo: 10000, fee: 1.5 },
+];
+const CUSTOMER_COLLECTION_BY_OPERATOR = {
+  AIRTEL_OAPI_ZMB: AIRTEL_CUSTOMER_COLLECTION,
+  MTN_MOMO_ZMB: MTN_CUSTOMER_COLLECTION,
+  ZAMTEL_ZMB: ZAMTEL_CUSTOMER_COLLECTION,
+};
+
+// The member's OWN network fee on a contribution/repayment (money in), charged
+// to their wallet by their MMO. Display-only — NOT part of what we charge.
+const customerFeeFor = (correspondent) => {
+  const bands = CUSTOMER_COLLECTION_BY_OPERATOR[correspondent] || MTN_CUSTOMER_COLLECTION;
+  return (amount) => bandFee(bands, amount);
+};
+
+// ── DISBURSEMENTS: pawaPay % (per operator) + MTN e-levy ──
+// pawaPay payout commission: Airtel 1%, MTN 2%, Zamtel 2%.
+const PAYOUT_RATE_BY_OPERATOR = {
+  AIRTEL_OAPI_ZMB: 0.01,
+  MTN_MOMO_ZMB: 0.02,
+  ZAMTEL_ZMB: 0.02,
+};
+const payoutRateFor = (correspondent) => PAYOUT_RATE_BY_OPERATOR[correspondent] ?? 0.02;
+
+// MTN e-levy, charged per transaction on disbursements (Airtel has none). Caps at
+// K8 — the bandFee fallback returns the top band for anything above K10,000.
+const MTN_PAYOUT_LEVY = [
+  { upTo: 150, fee: 0.32 },
+  { upTo: 300, fee: 0.4 },
+  { upTo: 500, fee: 0.8 },
+  { upTo: 1000, fee: 2 },
+  { upTo: 3000, fee: 4 },
+  { upTo: 5000, fee: 7.5 },
+  { upTo: 10000, fee: 8 },
+];
+
+// A mobile account can't receive more than this in ONE transfer; larger payouts
+// are split into ≤ceiling chunks (see splitForPayout).
+const PAYOUT_CEILING = num(process.env.PAYOUT_CEILING, 20000);
+
+// mnoFee for a DISBURSEMENT: the e-levy. Per pawaPay, ONLY MTN payouts carry it;
+// Airtel (1%) and Zamtel (2%) have none. Per-transaction, so above the receive
+// ceiling it STACKS per chunk — matching how the payout is actually split. The %
+// base (pawapayRate) is linear, so it is NOT stacked here.
+const payoutLevyFor = (correspondent) => {
+  const hasLevy = correspondent === "MTN_MOMO_ZMB"; // e-levy on MTN payouts only
+  return (amount) => {
+    if (!hasLevy) return 0;
+    if (amount <= PAYOUT_CEILING) return bandFee(MTN_PAYOUT_LEVY, amount);
+    const blocks = Math.floor(amount / PAYOUT_CEILING);
+    const remainder = amount - blocks * PAYOUT_CEILING;
+    return (
+      blocks * bandFee(MTN_PAYOUT_LEVY, PAYOUT_CEILING) +
+      (remainder > 0 ? bandFee(MTN_PAYOUT_LEVY, remainder) : 0)
+    );
+  };
+};
+
+// Split a payout above the receive ceiling into ≤ceiling transfers summing
+// EXACTLY to `amount`. ≤ceiling → a single transfer. Chunks are evenly sized (no
+// sub-minimum sliver) and whole-Kwacha when `amount` is: leftover Kwacha are
+// spread one-each across the first chunks; any sub-Kwacha remainder parks on the
+// last. `correspondent` is accepted for API symmetry; the ceiling is uniform.
+const splitForPayout = (amount, _correspondent) => {
+  if (amount <= PAYOUT_CEILING) return [amount];
+  const n = Math.ceil(amount / PAYOUT_CEILING);
+  const whole = Math.floor(amount);
+  const base = Math.floor(whole / n);
+  const extra = whole - base * n;
+  const chunks = Array.from({ length: n }, (_, i) => base + (i < extra ? 1 : 0));
+  const frac = Math.round((amount - whole) * 100) / 100;
+  if (frac > 0) chunks[chunks.length - 1] += frac;
+  return chunks;
 };
 
 // Contribution platform fee is a PERCENTAGE of the amount (unlike payout flows,
@@ -88,20 +237,24 @@ export const config = {
   },
 
   pricing: {
-    platformFee: num(process.env.PLATFORM_FEE, 2), // flat — payout/share-out/loan flows
-    platformRate: platformFeeRate, // percentage — contributions only
-    platformFeeFor, // (amount) => percentage platform fee for a contribution
-    pawapayRate: num(process.env.PAWAPAY_RATE, 0.01),
+    platformFee: num(process.env.PLATFORM_FEE, 2), // flat — loan-disbursement absorb path
+    platformRate: platformFeeRate, // our platform percentage (1%) — both flows
+    platformFeeFor, // (amount) => our 1% platform fee
+    pawapayRate: num(process.env.PAWAPAY_RATE, 0.01), // pawaPay % on COLLECTIONS (1%)
     feesOnEndUser: bool(process.env.PAWAPAY_FEES_ON_END_USER, false), // Model B default
     wholeKwachaOnly: bool(process.env.PAWAPAY_WHOLE_KWACHA_ONLY, true), // safe default for ZMW
-    mnoFee, // injected into priceContribution; bands are placeholders (see above)
 
-    // TEMP (testing): price CONTRIBUTIONS as a clean platform% + pawaPay% — no
-    // flat MNO fee, no whole-Kwacha rounding — so the fee reads as ~1% + 1%.
-    // Restore realistic MNO bands + rounding before go-live (see ⚠️ note above).
-    // Payout/share-out/loan flows keep `mnoFee` + `wholeKwachaOnly` untouched.
-    contributionMnoFee: () => 0,
-    contributionWholeKwacha: bool(process.env.CONTRIB_WHOLE_KWACHA, false),
+    // pawaPay merchant fees (see fee section above):
+    collectionFeeFor, // (correspondent) => (amount) => flat collection fee (money IN)
+    payoutRateFor, // (correspondent) => pawaPay payout % (1% Airtel / 2% MTN)
+    payoutLevyFor, // (correspondent) => (amount) => e-levy on payout (0 Airtel / MTN levy)
+    splitForPayout, // (amount) => [chunks] each ≤ receive ceiling, summing to amount
+    customerFeeFor, // (correspondent) => (amount) => member's OWN network fee (display-only, money IN)
+
+    // A contribution's deposit request is rounded UP to a whole Kwacha, matching
+    // payouts (`wholeKwachaOnly`). Set CONTRIB_WHOLE_KWACHA=false for exact-ngwee
+    // deposits.
+    contributionWholeKwacha: bool(process.env.CONTRIB_WHOLE_KWACHA, true),
   },
 
   rules: {

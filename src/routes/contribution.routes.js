@@ -59,15 +59,18 @@ router.post(
       platformFee: config.pricing.platformFeeFor(amount),
       pawapayRate: config.pricing.pawapayRate,
       feesOnEndUser: config.pricing.feesOnEndUser,
-      mnoFee: config.pricing.contributionMnoFee,
+      mnoFee: config.pricing.collectionFeeFor(providerFromPhone(phone)),
       wholeKwachaOnly: config.pricing.contributionWholeKwacha,
     });
     // Breakdown surfaced to the frontend so it can show the real total charged.
+    // networkFee = the member's OWN network charge to their wallet (display-only,
+    // not collected by us) — shown on the review tab / receipt.
     const breakdown = {
       base: pricing.base,
       platformFee: pricing.platformFee,
       depositAmount: pricing.depositAmount,
       feesCovered: pricing.feesCovered,
+      networkFee: config.pricing.customerFeeFor(providerFromPhone(phone))(amount),
     };
 
     // Build the full transaction and run model validation BEFORE any money
@@ -83,6 +86,7 @@ router.post(
       amount: -amount, // BASE (pooled/credited) — money out of the member's wallet
       depositAmount: pricing.depositAmount, // grossed-up total charged to the member
       platformFee: pricing.platformFee, // platform revenue on this txn (never pooled)
+      networkFee: isCash ? 0 : breakdown.networkFee, // member's own MMO fee (display-only)
       contributionType,
       paymentMethod,
       status: "pending",
@@ -150,10 +154,16 @@ router.post(
 
 /**
  * POST /api/contributions/:id/confirm-cash  (auth, treasurer/chairperson)
- * Acknowledge (or decline) physical receipt of a Cash contribution.
+ * Acknowledge (or decline) physical receipt of a Cash payment.
  * Body: { received?: boolean }  — defaults to true.
- * On confirm: settles the contribution and stamps the confirmer's name on it.
+ * On confirm: settles the payment and stamps the confirmer's name on it.
+ *
+ * Handles both a plain Cash contribution and a Cash "combined" payment (the
+ * unified checkout — savings + loan repayment(s) + penalties in one lump). Both
+ * settle through settleCompletedTransaction, which applies the right effects by
+ * transaction type, so this endpoint stays type-agnostic beyond the guard.
  */
+const CASH_CONFIRMABLE_TYPES = ["contribution", "combined"];
 router.post(
   "/:id/confirm-cash",
   requireAuth,
@@ -161,8 +171,12 @@ router.post(
     const received = req.body?.received !== false;
 
     const txn = await Transaction.findById(req.params.id);
-    if (!txn || txn.type !== "contribution" || txn.paymentMethod !== "Cash")
-      return res.status(404).json({ error: "Cash contribution not found" });
+    if (
+      !txn ||
+      !CASH_CONFIRMABLE_TYPES.includes(txn.type) ||
+      txn.paymentMethod !== "Cash"
+    )
+      return res.status(404).json({ error: "Cash payment not found" });
 
     const group = await Group.findById(txn.groupId).lean();
     if (!group) return res.status(404).json({ error: "Group not found" });
@@ -199,13 +213,14 @@ router.post(
     if (received) await settleCompletedTransaction(updated);
 
     if (updated.memberId && String(updated.memberId) !== String(req.userId)) {
+      const label = updated.type === "combined" ? "payment" : "contribution";
       await Notification.create({
         userId: updated.memberId,
         type: "contribution",
-        title: received ? "Cash contribution confirmed" : "Cash contribution declined",
+        title: received ? `Cash ${label} confirmed` : `Cash ${label} declined`,
         body: received
-          ? `${req.user.name} confirmed receiving your K${Math.abs(updated.amount)} cash contribution. Your savings have been updated.`
-          : `${req.user.name} declined your K${Math.abs(updated.amount)} cash contribution — the cash was not received. Please speak to your treasurer.`,
+          ? `${req.user.name} confirmed receiving your K${Math.abs(updated.amount)} cash ${label}. Your account has been updated.`
+          : `${req.user.name} declined your K${Math.abs(updated.amount)} cash ${label} — the cash was not received. Please speak to your treasurer.`,
         groupId: updated.groupId,
         groupName: updated.groupName,
         transactionId: updated._id,
