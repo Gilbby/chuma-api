@@ -73,6 +73,60 @@ router.get(
 );
 
 /**
+ * GET /api/groups/invites  (auth) — invitations still waiting on this user.
+ *
+ * The source of truth for a pending invitation is the group's own member row,
+ * NOT the invite notification. Notifications get marked read (by opening the
+ * inbox, by "mark all as read", by another device), and an invitation must
+ * outlive all of that: it disappears only when it is accepted or declined.
+ *
+ * Matched on userId OR phone so an invite sent before the invitee signed up
+ * still reaches them once they claim the number.
+ *
+ * Declared before GET /:id so "invites" is never read as a group id.
+ */
+router.get(
+  "/invites",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    // A missing phone would match every member row that has none, so only add
+    // the phone arm when there actually is one.
+    const identity = [{ userId: req.userId }];
+    if (req.user.phone) identity.push({ phone: req.user.phone });
+
+    const groups = await Group.find({
+      status: { $ne: "closed" },
+      members: { $elemMatch: { status: "pending", $or: identity } },
+    }).lean();
+
+    const invites = [];
+    for (const g of groups) {
+      const member = g.members.find(
+        (m) =>
+          m.status === "pending" &&
+          ((m.userId && String(m.userId) === String(req.userId)) ||
+            (m.phone && m.phone === req.user.phone))
+      );
+      if (!member) continue;
+      invites.push({
+        memberId: String(member._id),
+        groupId: String(g._id),
+        groupName: g.name,
+        groupType: g.groupType,
+        role: member.role || "Member",
+        invitedBy: member.invitedByName || null,
+        invitedAt: member.invitedAt || null,
+        memberCount: g.members.filter((m) => m.status === "active").length,
+        contributionAmount: g.contributionAmount,
+        contributionFrequency: g.contributionFrequency,
+      });
+    }
+
+    res.json({ invites });
+  })
+);
+
+/**
  * GET /api/groups/:id  (auth, member)
  */
 router.get(
@@ -529,6 +583,14 @@ router.post(
     member.userId = req.userId;
     member.name = req.user.name;
 
+    // Retire the invite notification here rather than leaving it to the client:
+    // the invitation is answered now, and every client reads "answered" from
+    // the member row, so a stale actionable invite in the inbox helps no one.
+    await Notification.updateMany(
+      { userId: req.userId, groupId: group._id, type: "invite", read: false },
+      { $set: { read: true } }
+    );
+
     // Let the chairperson know their invitee accepted (and with which role, when
     // it's an admin role like Treasurer/Secretary). Skip if the chairperson is
     // the one accepting (can't happen for a pending invite, but be safe).
@@ -547,6 +609,69 @@ router.post(
     }
 
     res.json({ message: "Joined group", group: withFeeStatus(group) });
+  })
+);
+
+/**
+ * POST /api/groups/:id/decline  (auth) — decline a pending invite.
+ *
+ * The counterpart to /accept: these two are the ONLY things that clear an
+ * invitation. The pending member row is pulled, so the invitation stops
+ * showing up for the invitee and the admins are free to re-invite them later.
+ */
+router.post(
+  "/:id/decline",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id))
+      return res.status(400).json({ error: "Valid group id required" });
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+
+    const mine = group.members.filter(
+      (m) =>
+        (m.userId && String(m.userId) === String(req.userId)) ||
+        (m.phone && m.phone === req.user.phone)
+    );
+
+    // Already joined: leaving a group is its own flow, not a declined invite.
+    if (mine.some((m) => m.status === "active"))
+      return res
+        .status(400)
+        .json({ error: "You are already a member of this group" });
+
+    const member = mine.find((m) => m.status === "pending");
+    // Nothing pending (cancelled by an admin, or declined on another device).
+    // Report success so the client can clear it rather than showing an error.
+    if (!member)
+      return res.json({ message: "No pending invite", alreadyHandled: true });
+
+    await Group.updateOne(
+      { _id: group._id, members: { $elemMatch: { _id: member._id, status: "pending" } } },
+      { $pull: { members: { _id: member._id } } }
+    );
+
+    // Retire the invite notification so it can't be acted on again.
+    await Notification.updateMany(
+      { userId: req.userId, groupId: group._id, type: "invite", read: false },
+      { $set: { read: true } }
+    );
+
+    // Tell the chairperson — a declined invite shouldn't be silent, otherwise
+    // they sit waiting on someone who has already said no.
+    const chairId = group.governance?.chairpersonUserId;
+    if (chairId && String(chairId) !== String(req.userId)) {
+      await Notification.create({
+        userId: chairId,
+        type: "governance",
+        title: "Invitation declined",
+        body: `${req.user.name} declined your invitation to join ${group.name}.`,
+        groupId: group._id,
+        groupName: group.name,
+      });
+    }
+
+    res.json({ message: "Invite declined" });
   })
 );
 
