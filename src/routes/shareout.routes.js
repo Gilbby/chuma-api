@@ -4,7 +4,7 @@ import { Penalty } from "../models/Penalty.js";
 import { Approval } from "../models/Approval.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
-import { requireAuth, requireKyc } from "../middleware/auth.js";
+import { requireAuth } from "../middleware/auth.js";
 import {
   requireGroupMember,
   requireGroupAdmin,
@@ -167,7 +167,10 @@ router.post(
 router.post(
   "/:groupId/distribute",
   requireAuth,
-  requireKyc,
+  // Deliberately no requireKyc: verification is asked for exactly once, at
+  // group creation, of the founder who becomes Chairperson. A Treasurer or
+  // Secretary is invited into their role and never verifies, so gating this
+  // would lock them out of a share-out they are entitled to run.
   requireGroupAdmin("groupId"),
   asyncHandler(async (req, res) => {
     const approval = await Approval.findOneAndUpdate(

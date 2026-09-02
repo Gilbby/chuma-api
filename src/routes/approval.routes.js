@@ -16,6 +16,7 @@ import {
 import { pricePayout } from "../services/pricing.service.js";
 import { config } from "../config/index.js";
 import { distributeShareOut } from "../services/shareout.service.js";
+import { resolveCashReceipt } from "../services/cashReceipt.service.js";
 import { refundAndRemoveMember } from "../services/memberExit.service.js";
 import {
   settleCompletedTransaction,
@@ -132,6 +133,22 @@ router.post(
         result = claimed;
         if (claimed.type === "loan" && claimed.refId)
           await Loan.findByIdAndUpdate(claimed.refId, { status: "rejected" });
+        // Rejecting a cash receipt means the money never arrived: fail the
+        // transaction and tell the member, exactly as declining from the
+        // notification does.
+        if (claimed.type === "cash-receipt" && claimed.refId) {
+          const txn = await Transaction.findById(claimed.refId);
+          if (txn)
+            await resolveCashReceipt({
+              txn,
+              admin: {
+                userId: req.userId,
+                name: req.user.name,
+                skipApproval: true,
+              },
+              received: false,
+            });
+        }
       }
     } else if (approves >= voted.requiredApprovals) {
       // Atomic pending→approved claim: exactly ONE request may execute the
@@ -209,6 +226,26 @@ router.post(
  * Execute the action behind an approved approval.
  */
 async function executeApproval(approval, req) {
+  // A cash receipt approved: the admin has the money, so settle the payment
+  // that has been sitting pending since it was recorded. resolveCashReceipt is
+  // the same path the notification's confirm button takes, and its atomic
+  // status flip makes a race between the two surfaces harmless.
+  if (approval.type === "cash-receipt" && approval.refId) {
+    const txn = await Transaction.findById(approval.refId);
+    if (!txn) return null;
+    const result = await resolveCashReceipt({
+      txn,
+      admin: { userId: req.userId, name: req.user.name, skipApproval: true },
+      received: true,
+    });
+    return {
+      type: "cash-receipt",
+      settled: !result.error,
+      transactionId: approval.refId,
+      ...(result.error ? { reason: result.error } : {}),
+    };
+  }
+
   if (approval.type === "loan" && approval.refId) {
     const loan = await Loan.findById(approval.refId);
     if (!loan) return null;

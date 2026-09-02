@@ -82,14 +82,13 @@ app.get("/api/health", (req, res) => res.json({ status: "ok", time: new Date() }
 
 // Routes
 app.use("/api/auth", authRoutes);
-// NOTE: KYC enforcement is HYBRID. Read/list endpoints stay open (so the app
-// shell + in-app "verify your identity" nudge/banner still work for unverified
-// users), but the money-movement actions apply `requireKyc` per-route — group
-// create + fee/pay (group.routes), contributions (contribution.routes), loan
-// request + repay (loan.routes) and share-out distribute (shareout.routes).
-// An unverified OR later-rejected user (kyc.status !== "verified") is blocked
-// from moving money with a 403 { code: "needs_kyc" }. This is the backstop that
-// makes "auto-approve KYC, revoke later if the ID is bad" actually revoke access.
+// NOTE: KYC is enforced at exactly ONE endpoint — POST /api/groups (group
+// creation), where the founder becomes the group's Chairperson and is charged
+// the registration fee. Nothing else applies `requireKyc`: signup never asks
+// for it, a Treasurer or Secretary is invited into their role and never
+// verifies, and every other money-movement route (contributions, payments,
+// loan request + repay, group fee/pay, share-out distribute) gates on
+// `requireRealName` instead. A blocked request returns 403 { code: "needs_kyc" }.
 app.use("/api/groups", groupRoutes);
 app.use("/api/contributions", contributionRoutes);
 app.use("/api/payments", paymentRoutes); // unified "pay everything at once" checkout

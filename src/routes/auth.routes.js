@@ -175,11 +175,12 @@ router.post(
           .json({ error: "No account for this number. Please sign up." });
       user.pinResetAllowedUntil = pinResetAllowedUntil;
       await user.save();
-      // Routing: everyone lands in the app. KYC is chairperson-only now (found
-      // a group, distribute a share-out); ordinary members transact under
-      // requireRealName. The verify nudge stays for the chairperson path.
-      const verified = user.kyc?.status === "verified";
-      if (!verified) await ensureKycNudge(user._id);
+      // Routing: everyone lands in the app. KYC is asked for at exactly one
+      // point — founding a group (POST /groups), where the founder becomes its
+      // Chairperson. Nobody is nudged for it here: Members, and the Treasurer
+      // and Secretary who are invited into their roles, never need it — they
+      // transact under requireRealName. Clear any nudge an older build left.
+      await clearKycNudge(user._id);
       return res.json({
         token: signToken(user._id),
         user: sanitizeUser(user),
@@ -241,7 +242,6 @@ router.post(
     }
     user.pinResetAllowedUntil = pinResetAllowedUntil;
     await user.save();
-    await ensureKycNudge(user._id);
     res.json({
       token: signToken(user._id),
       user: sanitizeUser(user),
@@ -254,24 +254,6 @@ router.post(
 function mergeKyc(user, patch) {
   const existing = user.kyc ? user.kyc.toObject?.() ?? user.kyc : {};
   user.kyc = { ...existing, ...patch };
-}
-
-// Ensure a single standing "complete your KYC" nudge sits in the user's inbox.
-// Idempotent — never duplicates if one is already there. Best-effort: a nudge
-// must never break authentication.
-async function ensureKycNudge(userId) {
-  try {
-    const existing = await Notification.findOne({ userId, type: "kyc" });
-    if (existing) return;
-    await Notification.create({
-      userId,
-      type: "kyc",
-      title: "Verify your identity",
-      body: "Complete a quick identity check to secure your account and unlock sending and receiving money.",
-    });
-  } catch (err) {
-    console.error("ensureKycNudge failed:", err.message);
-  }
 }
 
 // Remove any standing KYC nudge once the user is verified.

@@ -27,6 +27,11 @@ const approvalSchema = new Schema(
         "member-removal",
         "group-deletion",
         "share-out",
+        // An admin acknowledging that cash physically reached them. Unlike the
+        // rest of this list it is a receipt, not a group decision, so it needs
+        // ONE admin rather than a quorum — but it moves real money into a
+        // member's savings, so it belongs in the same audited place.
+        "cash-receipt",
       ],
       required: true,
     },

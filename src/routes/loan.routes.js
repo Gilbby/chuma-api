@@ -5,7 +5,7 @@ import { Approval } from "../models/Approval.js";
 import { Transaction } from "../models/Transaction.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
-import { requireAuth, requireRealName } from "../middleware/auth.js";
+import { requireAuth, requireRealName, hasRealName } from "../middleware/auth.js";
 import {
   requireGroupMember,
   isGroupAdmin,
@@ -34,20 +34,56 @@ const router = express.Router();
 
 /**
  * GET /api/loans/eligibility?groupId=...  (auth)
- * Returns the member's borrowing limit and current savings in the group.
+ * Returns the member's borrowing limit and current savings in the group, plus
+ * every reason they can't borrow at all.
+ *
+ * The limit alone is not eligibility. POST /loans refuses a request for four
+ * further reasons — an unpaid group fee, lending switched off, no real name on
+ * the account, an open loan already running — and none of them depend on the
+ * amount typed. Reporting them only on submit let a member fill in the whole
+ * form and reach the confirm step before being turned away, so they are
+ * answered here, in the same order the POST applies them, and the app blocks
+ * the flow at the start instead.
+ *
+ * `walletBalance` is returned rather than judged: whether the group can cover
+ * the loan depends on the amount, so the app checks it as they type.
  */
 router.get(
   "/eligibility",
   requireAuth,
   requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
+    const group = req.group;
     const savings = req.member.savings || 0;
-    const maxLoan = getMaxLoan(savings, req.group.loanMaxMultiplier);
+    const maxLoan = getMaxLoan(savings, group.loanMaxMultiplier);
+
+    const openLoan = await Loan.exists({
+      groupId: group._id,
+      memberId: req.userId,
+      status: { $in: ["pending", "active", "overdue"] },
+    });
+
+    let blocked = null;
+    if (!hasRealName(req.user?.name))
+      blocked = { code: "needs_name", reason: "Add your name before you can request a loan" };
+    else if (isGroupLocked(group.toObject()))
+      blocked = { code: "group_locked", reason: "This group is locked until its monthly fee is paid" };
+    else if (!group.constitution?.internalLendingEnabled)
+      blocked = { code: "lending_disabled", reason: "This group doesn't lend out its savings" };
+    else if (openLoan)
+      blocked = { code: "open_loan", reason: "You already have an open loan in this group. Repay it first." };
+    else if (maxLoan <= 0)
+      blocked = { code: "no_savings", reason: "You need savings in this group before you can borrow" };
+
     res.json({
       savings,
       maxLoan,
-      multiplier: req.group.loanMaxMultiplier,
-      interestRate: req.group.loanInterestRate,
+      multiplier: group.loanMaxMultiplier,
+      interestRate: group.loanInterestRate,
+      walletBalance: group.walletBalance || 0,
+      canBorrow: !blocked,
+      blockedCode: blocked?.code ?? null,
+      blockedReason: blocked?.reason ?? null,
     });
   })
 );

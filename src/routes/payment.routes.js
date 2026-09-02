@@ -2,7 +2,6 @@ import express from "express";
 import { Loan } from "../models/Loan.js";
 import { Penalty } from "../models/Penalty.js";
 import { Transaction } from "../models/Transaction.js";
-import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth, requireRealName } from "../middleware/auth.js";
 import { requireGroupMember } from "../middleware/groupAuth.js";
@@ -14,6 +13,7 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { settleCompletedTransaction } from "../services/settlement.service.js";
+import { raiseCashReceipt } from "../services/cashReceipt.service.js";
 import { priceContribution } from "../services/pricing.service.js";
 import { config } from "../config/index.js";
 
@@ -229,28 +229,18 @@ router.post(
     if (txn.status === "completed") await settleCompletedTransaction(txn);
 
     if (isCash) {
-      // Ask the treasurer (chairperson if the group has none) to acknowledge
-      // physically receiving the cash — settlement happens on their confirm.
-      // type "contribution" + a "confirm receipt" title so the existing cash
-      // action card in the app renders the confirm/decline buttons.
-      const active = group.members.filter((m) => m.status === "active" && m.userId);
-      const treasurers = active.filter((m) => m.role === "Treasurer");
-      const recipients = treasurers.length
-        ? treasurers
-        : active.filter((m) => m.role === "Chairperson");
-      for (const admin of recipients) {
-        await Notification.create({
-          userId: admin.userId,
-          type: "contribution",
-          title: "Cash payment — confirm receipt",
-          body: `${req.user.name} recorded a K${grandBase} cash payment to ${group.name} (${parts.join(", ")}). Confirm you received the cash to apply it.`,
-          groupId: group._id,
-          groupName: group.name,
-          transactionId: txn._id,
-        });
-      }
+      // Same receipt flow as a plain cash contribution: an approval for the
+      // group's record plus a notification to the treasurer, and nothing is
+      // applied — savings, repayments or penalties — until one of them says
+      // the money arrived.
+      const approval = await raiseCashReceipt({
+        group,
+        txn,
+        payerName: req.user.name,
+      });
       return res.status(201).json({
         transaction: txn,
+        approval,
         pricing: breakdown,
         message: "Recorded — awaiting treasurer confirmation of cash receipt",
       });

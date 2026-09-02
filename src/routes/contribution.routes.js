@@ -1,10 +1,9 @@
 import express from "express";
 import { Group } from "../models/Group.js";
 import { Transaction } from "../models/Transaction.js";
-import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth, requireRealName } from "../middleware/auth.js";
-import { requireGroupMember } from "../middleware/groupAuth.js";
+import { requireGroupMember, isGroupAdmin } from "../middleware/groupAuth.js";
 import { paymentLimiter } from "../middleware/rateLimits.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import { isGroupLocked } from "../services/logic.service.js";
@@ -14,6 +13,11 @@ import {
 } from "../services/pawapay.service.js";
 import { settleCompletedTransaction } from "../services/settlement.service.js";
 import { priceContribution } from "../services/pricing.service.js";
+import {
+  raiseCashReceipt,
+  resolveCashReceipt,
+  CASH_CONFIRMABLE_TYPES,
+} from "../services/cashReceipt.service.js";
 import { config } from "../config/index.js";
 
 const router = express.Router();
@@ -123,26 +127,18 @@ router.post(
     if (txn.status === "completed") await settleCompletedTransaction(txn);
 
     if (isCash) {
-      // Ask the treasurer (chairperson if the group has none) to acknowledge
-      // physically receiving the cash — settlement happens on their confirm.
-      const active = group.members.filter((m) => m.status === "active" && m.userId);
-      const treasurers = active.filter((m) => m.role === "Treasurer");
-      const recipients = treasurers.length
-        ? treasurers
-        : active.filter((m) => m.role === "Chairperson");
-      for (const admin of recipients) {
-        await Notification.create({
-          userId: admin.userId,
-          type: "contribution",
-          title: "Cash contribution — confirm receipt",
-          body: `${req.user.name} recorded a K${amount} cash contribution to ${group.name}. Confirm you received the cash to credit their savings.`,
-          groupId: group._id,
-          groupName: group.name,
-          transactionId: txn._id,
-        });
-      }
+      // Nothing is credited until an admin says the money reached them. That
+      // acknowledgement is raised as an approval (and a notification to the
+      // treasurer), so it is on the group's record like any other decision
+      // that moves money.
+      const approval = await raiseCashReceipt({
+        group,
+        txn,
+        payerName: req.user.name,
+      });
       return res.status(201).json({
         transaction: txn,
+        approval,
         pricing: breakdown,
         message: "Recorded — awaiting treasurer confirmation of cash receipt",
       });
@@ -153,7 +149,7 @@ router.post(
 );
 
 /**
- * POST /api/contributions/:id/confirm-cash  (auth, treasurer/chairperson)
+ * POST /api/contributions/:id/confirm-cash  (auth, group admin)
  * Acknowledge (or decline) physical receipt of a Cash payment.
  * Body: { received?: boolean }  — defaults to true.
  * On confirm: settles the payment and stamps the confirmer's name on it.
@@ -163,7 +159,6 @@ router.post(
  * settle through settleCompletedTransaction, which applies the right effects by
  * transaction type, so this endpoint stays type-agnostic beyond the guard.
  */
-const CASH_CONFIRMABLE_TYPES = ["contribution", "combined"];
 router.post(
   "/:id/confirm-cash",
   requireAuth,
@@ -180,54 +175,24 @@ router.post(
 
     const group = await Group.findById(txn.groupId).lean();
     if (!group) return res.status(404).json({ error: "Group not found" });
-    const me = group.members.find(
-      (m) => String(m.userId) === String(req.userId) && m.status === "active"
-    );
-    if (!me || (me.role !== "Treasurer" && me.role !== "Chairperson"))
+    // Any admin of the group, the same set that votes on the approval this
+    // receipt was raised as — the two surfaces must not disagree about who is
+    // allowed to answer. The treasurer is who gets ASKED (see raiseCashReceipt);
+    // a group whose treasurer is away still needs its members credited.
+    if (!isGroupAdmin(group, req.userId))
       return res
         .status(403)
-        .json({ error: "Only the treasurer or chairperson can confirm cash" });
+        .json({ error: "Only a group admin can confirm cash" });
 
-    // Same atomic pending→final guard as PawaPay settlement: double-taps and
-    // a second admin confirming concurrently become harmless no-ops.
-    const updated = await Transaction.findOneAndUpdate(
-      { _id: txn._id, status: "pending" },
-      received
-        ? {
-            status: "completed",
-            note: `${txn.note} — cash received by ${req.user.name}`,
-            "meta.cashConfirmedBy": req.userId,
-            "meta.cashConfirmedByName": req.user.name,
-          }
-        : {
-            status: "failed",
-            note: `${txn.note} — cash not received (declined by ${req.user.name})`,
-            "meta.cashConfirmedBy": req.userId,
-            "meta.cashConfirmedByName": req.user.name,
-          },
-      { new: true }
-    );
-    if (!updated)
-      return res.status(409).json({ error: "Already confirmed or declined" });
+    const result = await resolveCashReceipt({
+      txn,
+      admin: { userId: req.userId, name: req.user.name },
+      received,
+    });
+    if (result.error)
+      return res.status(result.status).json({ error: result.error });
 
-    if (received) await settleCompletedTransaction(updated);
-
-    if (updated.memberId && String(updated.memberId) !== String(req.userId)) {
-      const label = updated.type === "combined" ? "payment" : "contribution";
-      await Notification.create({
-        userId: updated.memberId,
-        type: "contribution",
-        title: received ? `Cash ${label} confirmed` : `Cash ${label} declined`,
-        body: received
-          ? `${req.user.name} confirmed receiving your K${Math.abs(updated.amount)} cash ${label}. Your account has been updated.`
-          : `${req.user.name} declined your K${Math.abs(updated.amount)} cash ${label} — the cash was not received. Please speak to your treasurer.`,
-        groupId: updated.groupId,
-        groupName: updated.groupName,
-        transactionId: updated._id,
-      });
-    }
-
-    res.json({ transaction: updated });
+    res.json({ transaction: result.transaction });
   })
 );
 
