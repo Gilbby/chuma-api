@@ -260,6 +260,9 @@ export const config = {
   rules: {
     groupMonthlyFee: num(process.env.GROUP_MONTHLY_FEE, 100),
     graceDays: num(process.env.GROUP_FEE_GRACE_DAYS, 5),
+    // A founder pays a monthly fee per group, so the cap is anti-abuse, not
+    // a product limit — it stops one account spinning up endless groups.
+    maxGroupsFounded: num(process.env.MAX_GROUPS_FOUNDED, 5),
     currency: process.env.CURRENCY || "ZMW",
     country: process.env.COUNTRY || "ZMB",
   },

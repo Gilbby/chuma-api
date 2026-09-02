@@ -4,7 +4,7 @@ import { Penalty } from "../models/Penalty.js";
 import { Transaction } from "../models/Transaction.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
-import { requireAuth, requireKyc } from "../middleware/auth.js";
+import { requireAuth, requireRealName } from "../middleware/auth.js";
 import { requireGroupMember } from "../middleware/groupAuth.js";
 import { paymentLimiter } from "../middleware/rateLimits.js";
 import { generateReceiptId } from "../utils/helpers.js";
@@ -53,7 +53,7 @@ const MAX_ITEMS = 20; // per obligation kind — nobody legitimately owes hundre
 router.post(
   "/checkout",
   requireAuth,
-  requireKyc,
+  requireRealName,
   paymentLimiter,
   requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {

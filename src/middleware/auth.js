@@ -33,10 +33,11 @@ export async function requireAuth(req, res, next) {
 
 /**
  * Require a KYC-verified user. Must run AFTER requireAuth (reads req.user).
- * Identity verification is mandatory before any money/group action — an
- * unverified or rejected user is blocked here even if a modified client tries
- * to bypass the onboarding gate. Returns 403 with a machine-readable code so
- * the app can route the user back to the verification screen.
+ * Reserved for CHAIRPERSON-level actions — founding a group and distributing a
+ * share-out. Ordinary members transact under requireRealName instead: share-out
+ * and loan payouts are addressed by mobile-money number, not by verified name.
+ * Returns 403 with a machine-readable code so the app can route to the
+ * verification screen instead of showing a raw error.
  */
 export function requireKyc(req, res, next) {
   if (req.user?.kyc?.status === "verified") return next();
@@ -47,4 +48,28 @@ export function requireKyc(req, res, next) {
   });
 }
 
-export default { signToken, requireAuth, requireKyc };
+/** A display name the user actually chose — not the signup stub or a phone. */
+export function hasRealName(name) {
+  const trimmed = String(name || "").trim();
+  if (trimmed.length < 2) return false;
+  if (trimmed.toLowerCase() === "new member") return false;
+  // A phone number back-filled as a name (invites store the number as the
+  // placeholder name until the invitee signs up).
+  if (/^[-+0-9 ]+$/.test(trimmed)) return false;
+  return true;
+}
+
+/**
+ * Require a chosen display name. Must run AFTER requireAuth (reads req.user).
+ * This is the member-tier gate: a payout or a group ledger entry is meaningless
+ * if it reads "New member". Full KYC stays on the chairperson routes.
+ */
+export function requireRealName(req, res, next) {
+  if (hasRealName(req.user?.name)) return next();
+  return res.status(403).json({
+    error: "Add your name before you can transact",
+    code: "needs_name",
+  });
+}
+
+export default { signToken, requireAuth, requireKyc, requireRealName, hasRealName };

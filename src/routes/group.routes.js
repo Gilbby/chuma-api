@@ -6,7 +6,7 @@ import { Transaction } from "../models/Transaction.js";
 import { Approval } from "../models/Approval.js";
 import { Loan } from "../models/Loan.js";
 import { asyncHandler } from "../middleware/error.js";
-import { requireAuth, requireKyc } from "../middleware/auth.js";
+import { requireAuth, requireKyc, requireRealName } from "../middleware/auth.js";
 import {
   requireGroupMember,
   requireGroupAdmin,
@@ -35,6 +35,11 @@ import { settleCompletedTransaction } from "../services/settlement.service.js";
 import config from "../config/index.js";
 
 const router = express.Router();
+
+// Roles an admin may hand out through an invite. Chairperson is deliberately
+// absent: it is set when the group is created and changing it is a transfer of
+// control, not an invite.
+const INVITABLE_ROLES = ["Member", "Treasurer", "Secretary"];
 
 /** Attach computed fee/lock status to a group object for responses. */
 function withFeeStatus(group) {
@@ -96,6 +101,18 @@ router.post(
     const body = req.body;
     const now = new Date();
     const feeDueDay = now.getDate() > 28 ? 28 : now.getDate();
+
+    // Anyone verified may found a group — the creator becomes its Chairperson,
+    // so there is no prior role to require. Cap how many they can run at once:
+    // the client can be bypassed, the fee only bites after the group exists.
+    const founded = await Group.countDocuments({
+      "governance.chairpersonUserId": req.userId,
+      status: { $ne: "closed" },
+    });
+    if (founded >= config.rules.maxGroupsFounded)
+      return res.status(403).json({
+        error: `You already run ${founded} groups. Close one before creating another.`,
+      });
 
     const payerPhone = body.payerPhone || req.user.phone;
     const fee = config.rules.groupMonthlyFee;
@@ -247,6 +264,24 @@ router.post(
     if (!phone || typeof phone !== "string")
       return res.status(400).json({ error: "Phone required" });
     const group = req.group;
+
+    // The member subdoc is added with updateOne + $push, which does NOT run
+    // schema validators, so an unchecked role would be written verbatim.
+    if (!INVITABLE_ROLES.includes(role))
+      return res.status(400).json({ error: "Invalid role" });
+
+    // Treasurer and Secretary are single seats. A group cannot end up with two
+    // of either through an invite; the chairperson is set at creation and is
+    // not transferable this way.
+    if (role !== "Member") {
+      const held = group.members.find(
+        (m) => m.status !== "removed" && m.role === role
+      );
+      if (held)
+        return res
+          .status(400)
+          .json({ error: `This group already has a ${role.toLowerCase()}` });
+    }
 
     const normalized = normalizePhone(phone);
     const invited = await User.findOne({ phone: normalized });
@@ -422,7 +457,7 @@ router.get(
 router.post(
   "/:id/fee/pay",
   requireAuth,
-  requireKyc,
+  requireRealName,
   paymentLimiter,
   requireGroupMember("id"),
   asyncHandler(async (req, res) => {

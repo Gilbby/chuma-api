@@ -28,6 +28,8 @@ const userSchema = new Schema(
       // Set true for accounts created via app signup — these must complete KYC
       // before entering the app (hard gate). Users seeded/added directly (no
       // flag) keep full access and only get the soft verification nudge.
+      // Deprecated: KYC is now just-in-time, so nothing reads this. Kept so
+      // existing documents validate without a migration.
       onboardingRequired: { type: Boolean },
       status: {
         type: String,

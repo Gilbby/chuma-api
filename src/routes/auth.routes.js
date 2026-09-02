@@ -5,7 +5,7 @@ import { Otp } from "../models/Otp.js";
 import { Group } from "../models/Group.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
-import { requireAuth, signToken } from "../middleware/auth.js";
+import { requireAuth, signToken, hasRealName } from "../middleware/auth.js";
 import {
   generateOtp,
   hashValue,
@@ -142,23 +142,17 @@ router.post(
           .json({ error: "No account for this number. Please sign up." });
       user.pinResetAllowedUntil = pinResetAllowedUntil;
       await user.save();
-      // Routing:
-      //  - verified            → into the app
-      //  - unverified + signup  → HARD gate: must finish KYC (onboardingRequired)
-      //  - unverified + seeded  → soft: into the app with a standing verify nudge
+      // Routing: everyone lands in the app. KYC is chairperson-only now (found
+      // a group, distribute a share-out); ordinary members transact under
+      // requireRealName. The verify nudge stays for the chairperson path.
       const verified = user.kyc?.status === "verified";
-      if (!verified && user.kyc?.onboardingRequired) {
-        return res.json({
-          token: signToken(user._id),
-          user: sanitizeUser(user),
-          next: "kyc",
-        });
-      }
       if (!verified) await ensureKycNudge(user._id);
       return res.json({
         token: signToken(user._id),
         user: sanitizeUser(user),
-        next: "tabs",
+        // Accounts created before the name step exists still carry the signup
+        // stub. Ask once, on the way in — the same step, just late.
+        next: hasRealName(user.name) ? "tabs" : "name",
       });
     }
 
@@ -169,13 +163,11 @@ router.post(
       return res.status(409).json({
         error: "An account already exists for this number. Please sign in instead.",
       });
-    // onboardingRequired flags this as an app signup → KYC is mandatory before
-    // entering the app (seeded/manually-added users have no flag = soft nudge).
     if (!user) {
       user = await User.create({
         name: "New member",
         phone: normalized,
-        kyc: { status: "incomplete", onboardingRequired: true },
+        kyc: { status: "incomplete" },
       });
 
       // Back-fill any phone-based invites so this new user sees pending
@@ -220,7 +212,7 @@ router.post(
     res.json({
       token: signToken(user._id),
       user: sanitizeUser(user),
-      next: "kyc",
+      next: "name",
     });
   })
 );
@@ -398,7 +390,18 @@ router.patch(
   requireAuth,
   asyncHandler(async (req, res) => {
     const { name, avatar, preferredPayment } = req.body;
-    if (name) req.user.name = name;
+    // A KYC-verified name is taken from the identity document, so it is fixed.
+    // Members who never verified may rename themselves freely.
+    if (name && name !== req.user.name) {
+      if (req.user.kyc?.status === "verified")
+        return res.status(403).json({
+          error: "Your verified name comes from your ID and can't be changed.",
+          code: "name_locked",
+        });
+      if (!hasRealName(name))
+        return res.status(400).json({ error: "Enter your real name" });
+      req.user.name = name;
+    }
     if (avatar) req.user.avatar = avatar;
     if (preferredPayment) {
       req.user.preferredPayment = {
