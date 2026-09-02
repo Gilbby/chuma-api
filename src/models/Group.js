@@ -15,6 +15,8 @@ const memberSchema = new Schema(
     },
     avatar: { type: String },
     invitedByName: { type: String },
+    invitedAt: { type: Date }, // when the invite was first created
+    lastInviteSentAt: { type: Date }, // last time the SMS/notification went out
     savings: { type: Number, default: 0 }, // this member's savings in the group
     contributions: { type: Number, default: 0 }, // count of contributions made
     loanActive: { type: Number, default: 0 }, // outstanding loan amount

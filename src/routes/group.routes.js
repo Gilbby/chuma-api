@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import { Group } from "../models/Group.js";
 import { User } from "../models/User.js";
 import { Notification } from "../models/Notification.js";
@@ -175,6 +176,8 @@ router.post(
           phone: c.normalized,
           role: c.role,
           invitedByName: req.user.name,
+          invitedAt: now,
+          lastInviteSentAt: now,
           status: "pending",
         })),
       ],
@@ -329,6 +332,8 @@ router.post(
             phone: normalized,
             role,
             invitedByName: req.user.name,
+            invitedAt: new Date(),
+            lastInviteSentAt: new Date(),
             status: "pending",
           },
         },
@@ -357,6 +362,123 @@ router.post(
     );
 
     res.json({ message: "Invite sent" });
+  })
+);
+
+/**
+ * POST /api/groups/:id/invite/:memberId/resend  (auth, admin) — resend a
+ * pending invite. The first SMS can be missed (phone off, wrong number typed,
+ * carrier drop), and until now the only path back was /invite, which refuses a
+ * number that is already pending. This re-sends the SMS and, if the invitee has
+ * signed up since the original invite, back-fills their userId and drops the
+ * in-app notification they never got.
+ */
+router.post(
+  "/:id/invite/:memberId/resend",
+  requireAuth,
+  inviteLimiter,
+  requireGroupAdmin("id"),
+  asyncHandler(async (req, res) => {
+    const group = req.group;
+    if (!mongoose.isValidObjectId(req.params.memberId))
+      return res.status(400).json({ error: "Valid memberId required" });
+    const member = group.members.id(req.params.memberId);
+    if (!member) return res.status(404).json({ error: "Invite not found" });
+    if (member.status !== "pending")
+      return res.status(400).json({
+        error:
+          member.status === "active"
+            ? "This person has already joined the group"
+            : "This person is no longer invited to the group",
+      });
+    if (!member.phone)
+      return res.status(400).json({ error: "This invite has no phone number" });
+
+    // Don't let an admin machine-gun someone's phone. One resend per minute is
+    // plenty for "it didn't arrive, try again".
+    const RESEND_COOLDOWN_MS = 60 * 1000;
+    if (
+      member.lastInviteSentAt &&
+      Date.now() - new Date(member.lastInviteSentAt).getTime() < RESEND_COOLDOWN_MS
+    )
+      return res
+        .status(429)
+        .json({ error: "Invite just sent. Wait a minute before resending." });
+
+    // The invitee may have registered after the original invite; link them now
+    // so the invitation shows up in their app, not only over SMS.
+    const invited = await User.findOne({ phone: member.phone });
+    const now = new Date();
+    const set = { "members.$.lastInviteSentAt": now };
+    if (invited && !member.userId) {
+      set["members.$.userId"] = invited._id;
+      if (invited.name) set["members.$.name"] = invited.name;
+    }
+    await Group.updateOne(
+      { _id: group._id, members: { $elemMatch: { _id: member._id, status: "pending" } } },
+      { $set: set }
+    );
+
+    if (invited) {
+      await Notification.create({
+        userId: invited._id,
+        type: "invite",
+        title: "Group invitation",
+        body: `${req.user.name} invited you to join ${group.name}${
+          member.role && member.role !== "Member" ? ` as ${member.role}` : ""
+        }.`,
+        groupId: group._id,
+        groupName: group.name,
+        invitedBy: req.user.name,
+      });
+    }
+
+    await sendSms(
+      member.phone,
+      `Reminder: ${req.user.name} invited you to join ${group.name} on Chuma. Download the app and sign up with this number to join.`
+    );
+
+    res.json({ message: "Invite resent", lastInviteSentAt: now });
+  })
+);
+
+/**
+ * DELETE /api/groups/:id/invite/:memberId  (auth, admin) — cancel a pending
+ * invite. Only pending rows can be cancelled; an active member is removed
+ * through the member-removal flow, not here.
+ */
+router.delete(
+  "/:id/invite/:memberId",
+  requireAuth,
+  requireGroupAdmin("id"),
+  asyncHandler(async (req, res) => {
+    const group = req.group;
+    if (!mongoose.isValidObjectId(req.params.memberId))
+      return res.status(400).json({ error: "Valid memberId required" });
+    const member = group.members.id(req.params.memberId);
+    if (!member) return res.status(404).json({ error: "Invite not found" });
+    if (member.status !== "pending")
+      return res
+        .status(400)
+        .json({ error: "Only a pending invite can be cancelled" });
+
+    const result = await Group.updateOne(
+      { _id: group._id, members: { $elemMatch: { _id: member._id, status: "pending" } } },
+      { $pull: { members: { _id: member._id } } }
+    );
+    if (result.modifiedCount === 0)
+      return res.status(409).json({ error: "Invite already handled" });
+
+    // Clear the invite notification so the invitee isn't left tapping a dead one.
+    if (member.userId) {
+      await Notification.deleteMany({
+        userId: member.userId,
+        groupId: group._id,
+        type: "invite",
+      });
+    }
+
+    res.json({ message: "Invite cancelled" });
   })
 );
 
