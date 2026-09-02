@@ -11,6 +11,7 @@ import { requireAuth, requireKyc, requireRealName } from "../middleware/auth.js"
 import {
   requireGroupMember,
   requireGroupAdmin,
+  ADMIN_ROLES,
 } from "../middleware/groupAuth.js";
 import { paymentLimiter, inviteLimiter } from "../middleware/rateLimits.js";
 import {
@@ -26,6 +27,7 @@ import {
   getRepaymentRate,
   getDefaults,
   getSavingsGrowth,
+  getRequiredApprovals,
 } from "../services/logic.service.js";
 import {
   initiateDeposit,
@@ -772,6 +774,158 @@ router.post(
       message: "Fee payment processing — confirm on your phone",
       receipt: { receiptId: txn.receiptId, amount, months },
       group: withFeeStatus(group),
+    });
+  })
+);
+
+/**
+ * POST /api/groups/:id/members/:memberId/remove  (auth, admin)
+ * Body: { reason?: string }
+ *
+ * Proposes removing a member. Nobody is removed here: this opens a
+ * "member-removal" approval that the group's OTHER admins vote on, and the
+ * refund + removal run from the approval executor once they carry it.
+ *
+ * Who votes: active Chairperson / Treasurer / Secretary, MINUS the person being
+ * removed — an admin can never sit on the vote that removes them. Ordinary
+ * members hold no vote here, the same as every other sensitive action.
+ */
+router.post(
+  "/:id/members/:memberId/remove",
+  requireAuth,
+  requireGroupAdmin("id"),
+  asyncHandler(async (req, res) => {
+    const group = req.group;
+    if (!mongoose.isValidObjectId(req.params.memberId))
+      return res.status(400).json({ error: "Valid memberId required" });
+
+    const member = group.members.id(req.params.memberId);
+    if (!member) return res.status(404).json({ error: "Member not found" });
+    if (member.status === "pending")
+      return res.status(400).json({
+        error: "That invite hasn't been accepted — withdraw the invite instead",
+      });
+    if (member.status !== "active")
+      return res.status(400).json({ error: "Member is not in this group" });
+    if (String(member.userId) === String(req.userId))
+      return res
+        .status(400)
+        .json({ error: "You cannot remove yourself from the group" });
+
+    // An office holder is never removed out from under their office: the group
+    // changes who holds the role first, and removes an ordinary member second.
+    // This also stops removal being used to unseat the people who vote on it.
+    if (ADMIN_ROLES.includes(member.role))
+      return res.status(400).json({
+        error: `${member.name} is the group's ${member.role}. An admin cannot be removed — hand the role to someone else first.`,
+      });
+
+    // Money is leaving the pool, so the same lock that stops contributions and
+    // loans stops a removal — the group settles its fee first.
+    if (isGroupLocked(group.toObject()))
+      return res.status(403).json({
+        error: "Group is locked for unpaid fees. Settle the fee first.",
+      });
+
+    // Everyone entitled to vote on THIS removal: active admins, minus the
+    // member being removed. With nobody left to vote there is no quorum to
+    // reach, so the removal cannot be proposed at all.
+    const voters = group.members.filter(
+      (m) =>
+        m.status === "active" &&
+        m.userId &&
+        ADMIN_ROLES.includes(m.role) &&
+        String(m._id) !== String(member._id)
+    );
+    if (voters.length === 0)
+      return res.status(400).json({
+        error:
+          "No other admin can vote on this removal. Appoint another admin first.",
+      });
+
+    const existing = await Approval.findOne({
+      groupId: group._id,
+      type: "member-removal",
+      refId: member._id,
+      status: "pending",
+    });
+    if (existing)
+      return res.status(409).json({
+        error: "A removal is already awaiting a decision for this member",
+        approval: existing,
+      });
+
+    // Their savings are refunded on the way out and clear their own debt first.
+    // Owing more than they hold would leave the group short, so that has to be
+    // settled while they are still a member.
+    const debt = await Loan.aggregate([
+      {
+        $match: {
+          groupId: group._id,
+          memberId: member.userId,
+          status: { $in: ["active", "overdue"] },
+        },
+      },
+      { $group: { _id: null, total: { $sum: "$outstanding" } } },
+    ]);
+    const outstanding = debt[0]?.total || 0;
+    if (outstanding > (member.savings || 0))
+      return res.status(400).json({
+        error: `${member.name} owes K${outstanding} against K${member.savings || 0} in savings. The loan must be repaid before they can be removed.`,
+      });
+
+    const required = getRequiredApprovals(
+      group.constitution?.approvalThreshold || "majority",
+      voters.length
+    );
+
+    const refund = Math.max(0, (member.savings || 0) - outstanding);
+    const approval = await Approval.create({
+      groupId: group._id,
+      groupName: group.name,
+      type: "member-removal",
+      title: `Remove ${member.name}`,
+      description:
+        req.body?.reason?.trim() ||
+        `Removal of ${member.name} requested by ${req.user.name}`,
+      amount: refund, // what goes back to them if this carries
+      requestedById: req.userId,
+      requestedBy: req.user.name,
+      refId: member._id,
+      targetUserId: member.userId,
+      targetName: member.name,
+      requiredApprovals: required,
+    });
+
+    await Notification.insertMany(
+      voters.map((v) => ({
+        userId: v.userId,
+        type: "governance",
+        title: "Member removal proposed",
+        body: `${req.user.name} proposed removing ${member.name} from ${group.name}. ${required} approval${required === 1 ? "" : "s"} needed. K${refund} would be refunded to them.`,
+        groupId: group._id,
+        groupName: group.name,
+      }))
+    );
+
+    // The member hears it from the group, not from the payout landing later.
+    if (member.userId) {
+      await Notification.create({
+        userId: member.userId,
+        type: "governance",
+        title: "Your removal was proposed",
+        body: `${req.user.name} proposed removing you from ${group.name}. The group's other admins decide. If it carries, your K${member.savings || 0} savings are refunded${outstanding > 0 ? " after clearing your loan" : ""}.`,
+        groupId: group._id,
+        groupName: group.name,
+      });
+    }
+
+    res.json({
+      message: "Removal proposed, pending admin approval",
+      approval,
+      requiredApprovals: required,
+      eligibleVoters: voters.length,
+      refund,
     });
   })
 );

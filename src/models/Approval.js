@@ -37,8 +37,14 @@ const approvalSchema = new Schema(
     requestedById: { type: Schema.Types.ObjectId, ref: "User" },
     requestedBy: { type: String },
 
-    // Reference to the entity being approved (loan id, etc.)
+    // Reference to the entity being approved (loan id, member row id, etc.)
     refId: { type: Schema.Types.ObjectId },
+
+    // Who a "member-removal" is about. They may hold an admin role themselves,
+    // and nobody votes on their own removal — the vote route reads this to keep
+    // them out of the quorum that decides it.
+    targetUserId: { type: Schema.Types.ObjectId, ref: "User" },
+    targetName: { type: String },
 
     requiredApprovals: { type: Number, default: 2 },
     votes: [voteSchema],

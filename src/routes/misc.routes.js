@@ -543,9 +543,16 @@ router.get(
   })
 );
 
+// What the member sees on their mobile money statement, per payout kind.
+const PAYOUT_DESCRIPTIONS = {
+  loan: "Chuma loan",
+  "share-out": "Chuma share out",
+  withdrawal: "Chuma refund",
+};
+
 /**
  * POST /api/transactions/:id/retry-payout  (auth, treasurer/chairperson)
- * Re-send a FAILED loan-disbursement or share-out payout. Creates a fresh
+ * Re-send a FAILED loan-disbursement, share-out or removal-refund payout. Creates a fresh
  * pending transaction (carrying the original's settlement meta) that settles
  * through the normal webhook/cron path. One retry per failed transaction —
  * claimed atomically so a double-tap can never send the money twice; if the
@@ -559,7 +566,7 @@ router.post(
     const failed = await Transaction.findById(req.params.id);
     if (
       !failed ||
-      !["loan", "share-out"].includes(failed.type) ||
+      !["loan", "share-out", "withdrawal"].includes(failed.type) ||
       !failed.pawapay?.transfers?.length
     )
       return res.status(404).json({ error: "Failed payout not found" });
@@ -629,7 +636,7 @@ router.post(
       amounts: toResend.map((t) => t.amount),
       phone: member.phone,
       provider: providerFromPhone(member.phone),
-      statementDescription: failed.type === "loan" ? "Chuma loan" : "Chuma share out",
+      statementDescription: PAYOUT_DESCRIPTIONS[failed.type] || "Chuma payout",
       metadata: failed.meta?.loanId
         ? [{ fieldName: "loanId", fieldValue: String(failed.meta.loanId) }]
         : [],

@@ -27,6 +27,7 @@ import { advancePaidThrough } from "./logic.service.js";
  *   repayment  → { loanId }
  *   loan       → { loanId }            (disbursement payout)
  *   share-out  → { memberSavings }     (member's savings snapshot at share-out)
+ *   withdrawal → { exit, memberRowId, memberSavings }  (refund on removal)
  *   combined   → { contribution, topup, repayments:[{loanId,amount}], penaltyIds:[] }
  */
 
@@ -382,8 +383,83 @@ export async function settleCompletedTransaction(txn) {
       return;
     }
 
+    case "withdrawal": {
+      // A removed member's refund landed. Only an exit withdrawal has effects;
+      // any other withdrawal shape stays inert (as before).
+      if (!txn.meta?.exit || !txn.meta?.memberRowId) return;
+
+      // Their stake leaves the pool and their row retires in ONE atomic write.
+      // Removal is what makes the refund final: settle first, remove second, so
+      // a payout that never completes leaves them a member with their savings
+      // intact rather than an ex-member the group still owes.
+      const snapshot = Math.max(0, Number(txn.meta?.memberSavings) || 0);
+      const paidOut = Math.abs(txn.amount); // full stake — netted debt returned via Leg A
+      // The row is retired, NOT wiped. Live savings go to 0 because that money
+      // really did leave the group, but the contribution count and the figures
+      // as they stood at the exit stay on the record — the group's history of
+      // this member survives their removal.
+      await Group.updateOne(
+        { _id: txn.groupId },
+        {
+          $set: {
+            "members.$[m].savings": 0,
+            "members.$[m].loanActive": 0,
+            "members.$[m].status": "removed",
+            "members.$[m].exitedAt": new Date(),
+            "members.$[m].exitSavings": snapshot,
+            "members.$[m].exitRefund": txn.depositAmount ?? 0,
+            "members.$[m].exitLoanCleared":
+              Math.max(0, Number(txn.meta?.appliedToLoan) || 0),
+            ...(txn.meta?.approvalId
+              ? { "members.$[m].exitApprovalId": txn.meta.approvalId }
+              : {}),
+          },
+          $inc: { totalSavings: -snapshot, walletBalance: -paidOut },
+        },
+        { arrayFilters: [{ "m._id": txn.meta.memberRowId }] }
+      );
+      // $inc can leave drift below zero when rollups and payouts race.
+      await Group.updateOne(
+        { _id: txn.groupId, totalSavings: { $lt: 0 } },
+        { $set: { totalSavings: 0 } }
+      );
+      await Group.updateOne(
+        { _id: txn.groupId, walletBalance: { $lt: 0 } },
+        { $set: { walletBalance: 0 } }
+      );
+
+      if (txn.platformFee && txn.platformFee > 0) {
+        try {
+          await PlatformRevenue.create({
+            groupId: txn.groupId,
+            transactionId: txn._id,
+            userId: txn.memberId,
+            amount: txn.platformFee,
+            source: "payout",
+            currency: "ZMW",
+          });
+        } catch (err) {
+          if (err?.code !== 11000) throw err;
+        }
+      }
+
+      if (txn.memberId) {
+        const sent = txn.depositAmount ?? 0;
+        const toLoan = Math.max(0, Number(txn.meta?.appliedToLoan) || 0);
+        await Notification.create({
+          userId: txn.memberId,
+          type: "governance",
+          title: "Removed from group",
+          body: `You were removed from ${txn.groupName}. Your K${snapshot} savings were refunded${toLoan > 0 ? ` after K${toLoan} cleared your outstanding loan` : ""}${sent > 0 ? ` — K${sent} sent to your mobile wallet` : ""}.`,
+          groupId: txn.groupId,
+          groupName: txn.groupName,
+        });
+      }
+      return;
+    }
+
     default:
-      return; // withdrawal etc. — no settlement effects defined
+      return; // no settlement effects defined for this type
   }
 }
 
@@ -394,6 +470,7 @@ const FAIL_LABELS = {
   repayment: "loan repayment",
   loan: "loan disbursement",
   "share-out": "share-out payout",
+  withdrawal: "removal refund",
   combined: "payment",
 };
 
@@ -405,6 +482,7 @@ const FAIL_NOTIF_TYPE = {
   repayment: "repayment",
   loan: "loan",
   "share-out": "governance",
+  withdrawal: "governance",
   combined: "contribution",
 };
 
@@ -416,7 +494,8 @@ export async function handleFailedTransaction(txn) {
   const label = FAIL_LABELS[txn.type] || "payment";
   const notifType = FAIL_NOTIF_TYPE[txn.type] || "governance";
   const amount = Math.abs(txn.amount);
-  const isPayout = txn.type === "loan" || txn.type === "share-out";
+  const isPayout =
+    txn.type === "loan" || txn.type === "share-out" || txn.type === "withdrawal";
 
   if (txn.memberId) {
     await Notification.create({

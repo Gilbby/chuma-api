@@ -7,7 +7,7 @@ import { Transaction } from "../models/Transaction.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
-import { isGroupAdmin } from "../middleware/groupAuth.js";
+import { isGroupAdmin, ADMIN_ROLES } from "../middleware/groupAuth.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import {
   initiatePayout,
@@ -16,6 +16,7 @@ import {
 import { pricePayout } from "../services/pricing.service.js";
 import { config } from "../config/index.js";
 import { distributeShareOut } from "../services/shareout.service.js";
+import { refundAndRemoveMember } from "../services/memberExit.service.js";
 import {
   settleCompletedTransaction,
   handleFailedTransaction,
@@ -75,6 +76,18 @@ router.post(
       return res
         .status(403)
         .json({ error: "Only group admins can vote on approvals" });
+
+    // An admin facing removal keeps their vote everywhere EXCEPT on their own
+    // removal — otherwise the person being removed decides it. The quorum was
+    // sized without them (see the remove route), so this only closes the door.
+    if (
+      approval.type === "member-removal" &&
+      approval.targetUserId &&
+      String(approval.targetUserId) === String(req.userId)
+    )
+      return res
+        .status(403)
+        .json({ error: "You cannot vote on your own removal" });
 
     // Record the vote ATOMICALLY: it only lands if the approval is still
     // pending and this admin hasn't voted. A read-push-save here lets two
@@ -139,6 +152,56 @@ router.post(
       progress: { approves, required: voted.requiredApprovals },
       executed,
     });
+  })
+);
+
+/**
+ * POST /api/approvals/:id/execute  (auth, group admin) — re-run an approval
+ * whose vote carried but whose action could not complete at the time (a refund
+ * the wallet couldn't cover yet, say). The votes stand; only the action runs.
+ */
+router.post(
+  "/:id/execute",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const approval = await Approval.findById(req.params.id);
+    if (!approval) return res.status(404).json({ error: "Approval not found" });
+
+    const group = await Group.findById(approval.groupId).lean();
+    if (!group || !isGroupAdmin(group, req.userId))
+      return res.status(403).json({ error: "Only group admins can run this" });
+
+    if (approval.status === "executed")
+      return res.status(400).json({ error: "Already carried out" });
+    if (approval.status !== "approved")
+      return res
+        .status(400)
+        .json({ error: "Only an approved action can be run" });
+
+    // Claim it first: two admins tapping "run again" at once must not refund or
+    // disburse twice. The claim is released below if the action is still blocked.
+    const claimed = await Approval.findOneAndUpdate(
+      { _id: approval._id, status: "approved" },
+      { status: "executed" },
+      { new: true }
+    );
+    if (!claimed)
+      return res.status(409).json({ error: "Already being carried out" });
+
+    let executed;
+    try {
+      executed = await executeApproval(claimed, req);
+    } catch (err) {
+      await Approval.updateOne({ _id: claimed._id }, { status: "approved" });
+      throw err;
+    }
+    // Still blocked — hand the approval back so it can be run again later.
+    if (executed?.type?.endsWith("-blocked")) {
+      await Approval.updateOne({ _id: claimed._id }, { status: "approved" });
+      return res.status(409).json({ error: executed.reason, executed });
+    }
+
+    res.json({ approval: await Approval.findById(claimed._id), executed });
   })
 );
 
@@ -321,6 +384,63 @@ async function executeApproval(approval, req) {
   if (approval.type === "group-deletion" && approval.groupId) {
     await Group.findByIdAndUpdate(approval.groupId, { status: "closed" });
     return { type: "group-closed", groupId: approval.groupId };
+  }
+
+  if (approval.type === "member-removal" && approval.groupId) {
+    const group = await Group.findById(approval.groupId);
+    if (!group) return null;
+    const member =
+      group.members.id(approval.refId) ||
+      group.members.find(
+        (m) =>
+          approval.targetUserId &&
+          String(m.userId) === String(approval.targetUserId) &&
+          m.status === "active"
+      );
+    if (!member || member.status !== "active") {
+      await Approval.updateOne({ _id: approval._id }, { status: "executed" });
+      approval.status = "executed";
+      return { type: "member-removal-noop", reason: "member already left" };
+    }
+
+    // They hold an office now — proposed as an ordinary member, promoted while
+    // the vote ran. An admin is never removed, so this stops here and the
+    // approval stays runnable if the role is handed on later.
+    if (ADMIN_ROLES.includes(member.role))
+      return {
+        type: "member-removal-blocked",
+        reason: `${member.name} is now the group's ${member.role}. An admin cannot be removed — hand the role to someone else first.`,
+      };
+
+    try {
+      const result = await refundAndRemoveMember(group, member, {
+        approvalId: approval._id,
+      });
+      // One-shot action: mark executed so a replay can never refund twice.
+      await Approval.updateOne({ _id: approval._id }, { status: "executed" });
+      approval.status = "executed";
+
+      const chairId = group.governance?.chairpersonUserId;
+      if (chairId) {
+        await Notification.create({
+          userId: chairId,
+          type: "governance",
+          title: "Member removal approved",
+          body: `${member.name} was removed from ${group.name}. K${result.refunded} refunded${result.appliedToLoan > 0 ? ` after K${result.appliedToLoan} cleared their loan` : ""}${result.pending ? " — the payout is on its way." : "."}`,
+          groupId: group._id,
+          groupName: group.name,
+        });
+      }
+      return { type: "member-removed", groupId: group._id, ...result };
+    } catch (err) {
+      if (err.status === 409) {
+        // Wallet can't cover the refund yet. The approval stays "approved" so
+        // admins can run it again once repayments land — nobody is removed and
+        // no money moved.
+        return { type: "member-removal-blocked", reason: err.message };
+      }
+      throw err;
+    }
   }
 
   if (approval.type === "share-out" && approval.groupId) {

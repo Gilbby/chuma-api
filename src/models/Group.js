@@ -25,6 +25,16 @@ const memberSchema = new Schema(
       enum: ["pending", "active", "removed"],
       default: "active",
     },
+
+    // A removed member's row is KEPT, never deleted: what they saved and
+    // contributed is part of the group's history and has to outlive them
+    // leaving. Their live savings go to 0 when the refund lands (the money is
+    // genuinely gone), so these freeze the figures as they stood at the exit.
+    exitedAt: { type: Date },
+    exitSavings: { type: Number }, // savings held at the moment they left
+    exitRefund: { type: Number }, // cash actually sent back to their wallet
+    exitLoanCleared: { type: Number }, // stake that went to their own loan
+    exitApprovalId: { type: Schema.Types.ObjectId, ref: "Approval" },
   },
   { _id: true }
 );
