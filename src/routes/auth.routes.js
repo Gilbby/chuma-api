@@ -28,6 +28,39 @@ const router = express.Router();
 const OTP_MODES = ["signup", "signin"];
 const MAX_OTP_ATTEMPTS = 5;
 const MAX_OTPS_PER_PHONE_PER_HOUR = 3;
+const MAX_PIN_ATTEMPTS = 5;
+const PIN_LOCKOUT_MS = 15 * 60 * 1000;
+
+// Failed PIN attempts per user, in memory: a lockout only has to outlive a
+// guessing burst, and nothing here is worth a database write per attempt. A
+// process restart forgives the counter — an acceptable trade for a check that
+// already sits behind a valid session token.
+const pinAttempts = new Map();
+
+function pinAttemptsExceeded(userId) {
+  const entry = pinAttempts.get(userId);
+  if (!entry) return false;
+  if (Date.now() - entry.first > PIN_LOCKOUT_MS) {
+    pinAttempts.delete(userId);
+    return false;
+  }
+  return entry.count >= MAX_PIN_ATTEMPTS;
+}
+
+function recordFailedPin(userId) {
+  const now = Date.now();
+  const entry = pinAttempts.get(userId);
+  if (!entry || now - entry.first > PIN_LOCKOUT_MS) {
+    pinAttempts.set(userId, { count: 1, first: now });
+    return MAX_PIN_ATTEMPTS - 1;
+  }
+  entry.count += 1;
+  return Math.max(0, MAX_PIN_ATTEMPTS - entry.count);
+}
+
+function clearPinAttempts(userId) {
+  pinAttempts.delete(userId);
+}
 
 /**
  * POST /api/auth/request-otp
@@ -371,6 +404,48 @@ router.post(
 );
 
 /**
+ * POST /api/auth/verify-pin  (auth)
+ * Body: { pin }
+ * Checks the app PIN without changing it — the client uses it to unlock
+ * sensitive views (revealing a balance, confirming money actions). Kept
+ * separate from POST /pin on purpose: verifying must never re-hash the PIN,
+ * and it must not honour the post-OTP reset window, which would let a fresh
+ * sign-in skip the check entirely.
+ */
+router.post(
+  "/verify-pin",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { pin } = req.body;
+    if (!req.user.pinHash)
+      return res
+        .status(400)
+        .json({ error: "No PIN set for this account", code: "no_pin" });
+
+    const userId = String(req.user._id);
+    if (pinAttemptsExceeded(userId))
+      return res.status(429).json({
+        error: "Too many incorrect PIN attempts. Try again in a few minutes.",
+        code: "pin_locked",
+      });
+
+    const valid =
+      /^\d{4,6}$/.test(String(pin ?? "")) &&
+      (await bcrypt.compare(String(pin), req.user.pinHash));
+
+    if (!valid) {
+      const remaining = recordFailedPin(userId);
+      return res
+        .status(401)
+        .json({ error: "Incorrect PIN", code: "bad_pin", remaining });
+    }
+
+    clearPinAttempts(userId);
+    res.json({ valid: true });
+  })
+);
+
+/**
  * GET /api/auth/me  (auth)
  */
 router.get(
@@ -420,8 +495,11 @@ function sanitizeUser(user) {
     0
   ); // recomputed properly in reports; cached here
   const obj = user.toObject();
+  // hasPin, never the hash: the client offers the PIN unlock only when there
+  // is a PIN to check against.
+  const hasPin = !!obj.pinHash;
   delete obj.pinHash;
-  return { ...obj, trustBand: getTrustBand(user.trustScore || score) };
+  return { ...obj, hasPin, trustBand: getTrustBand(user.trustScore || score) };
 }
 
 export default router;
