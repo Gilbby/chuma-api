@@ -4,7 +4,6 @@ import { Approval } from "../models/Approval.js";
 import { Loan } from "../models/Loan.js";
 import { Group } from "../models/Group.js";
 import { Transaction } from "../models/Transaction.js";
-import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
 import { isGroupAdmin, ADMIN_ROLES } from "../middleware/groupAuth.js";
@@ -15,6 +14,7 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { pricePayout } from "../services/pricing.service.js";
+import { notify } from "../services/notify.service.js";
 import { config } from "../config/index.js";
 import { distributeShareOut } from "../services/shareout.service.js";
 import { resolveCashReceipt } from "../services/cashReceipt.service.js";
@@ -370,7 +370,7 @@ async function executeApproval(approval, req) {
           status: "REJECTED",
           failureReason: JSON.stringify({
             rejectionReason: "PAYOUT_PRICING_FAILED",
-            message: `Fees meet or exceed the K${loan.principal} principal — cannot disburse`,
+            message: `Fees meet or exceed the K${loan.principal} principal. Cannot disburse`,
           }),
         },
         meta: { loanId: loan._id },
@@ -472,13 +472,16 @@ async function executeApproval(approval, req) {
     }
 
     if (loan.memberId) {
-      await Notification.create({
+      await notify({
         userId: loan.memberId,
         type: "loan",
         title: "Loan approved",
         body: `Your loan of K${loan.principal} is approved and is on its way to your wallet.`,
         groupId: loan.groupId,
         groupName: loan.groupName,
+        // The outcome of a vote they have been waiting on.
+        sms: true,
+        smsText: `Chuma: Your K${loan.principal} loan is approved and on its way to your wallet.`,
       });
     }
 
@@ -526,7 +529,7 @@ async function executeApproval(approval, req) {
     if (ADMIN_ROLES.includes(member.role))
       return {
         type: "member-removal-blocked",
-        reason: `${member.name} is now the group's ${member.role}. An admin cannot be removed — hand the role to someone else first.`,
+        reason: `${member.name} is now the group's ${member.role}. An admin cannot be removed. Hand the role to someone else first.`,
       };
 
     try {
@@ -539,13 +542,17 @@ async function executeApproval(approval, req) {
 
       const chairId = group.governance?.chairpersonUserId;
       if (chairId) {
-        await Notification.create({
+        await notify({
           userId: chairId,
           type: "governance",
           title: "Member removal approved",
-          body: `${member.name} was removed from ${group.name}. K${result.refunded} refunded${result.appliedToLoan > 0 ? ` after K${result.appliedToLoan} cleared their loan` : ""}${result.pending ? " — the payout is on its way." : "."}`,
+          body: `${member.name} was removed from ${group.name}. K${result.refunded} refunded${result.appliedToLoan > 0 ? ` after K${result.appliedToLoan} cleared their loan` : ""}${result.pending ? ". The payout is on its way." : "."}`,
           groupId: group._id,
           groupName: group.name,
+          // A member left and group money went with them. The chair answers
+          // for both at the next meeting.
+          sms: true,
+          smsText: `Chuma: ${member.name} was removed from ${group.name}. K${result.refunded} was refunded to them.`,
         });
       }
       return { type: "member-removed", groupId: group._id, ...result };

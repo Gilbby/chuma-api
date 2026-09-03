@@ -300,7 +300,7 @@ router.post(
         payerName: req.user.name,
       });
       return res.json({
-        message: "Recorded — awaiting an admin's confirmation of the cash",
+        message: "Recorded. Awaiting an admin's confirmation of the cash",
         penalty,
         transaction: txn,
         approval,
@@ -329,7 +329,7 @@ router.post(
     }
 
     res.json({
-      message: "Penalty payment processing — confirm on your phone",
+      message: "Penalty payment processing. Confirm on your phone",
       penalty,
       transaction: txn,
     });
@@ -424,7 +424,7 @@ router.post(
         payerName: req.user.name,
       });
       return res.json({
-        message: "Recorded — awaiting an admin's confirmation of the cash",
+        message: "Recorded. Awaiting an admin's confirmation of the cash",
         transaction: txn,
         approval,
       });
@@ -452,7 +452,7 @@ router.post(
     }
 
     res.json({
-      message: "Penalty payment processing — confirm on your phone",
+      message: "Penalty payment processing. Confirm on your phone",
       penalties,
       transaction: txn,
     });
@@ -644,7 +644,7 @@ router.post(
       if (loan.status !== "pending")
         return res
           .status(400)
-          .json({ error: `Loan is already ${loan.status} — nothing to disburse` });
+          .json({ error: `Loan is already ${loan.status}. Nothing to disburse` });
     }
 
     const member = group.members.find(
@@ -660,7 +660,7 @@ router.post(
     const owed = Math.abs(failed.amount);
     if (owed > (group.walletBalance || 0))
       return res.status(409).json({
-        error: `Group wallet only holds K${group.walletBalance || 0} — it cannot cover this K${owed} payout yet.`,
+        error: `Group wallet only holds K${group.walletBalance || 0}. It cannot cover this K${owed} payout yet.`,
       });
 
     // Only the transfers that did NOT complete are re-sent. A large payout is
@@ -672,7 +672,7 @@ router.post(
     if (!toResend.length)
       return res
         .status(400)
-        .json({ error: "All transfers already completed — nothing to retry" });
+        .json({ error: "All transfers already completed. Nothing to retry" });
 
     // Claim the payout before sending any money, so a double-tap can't re-send
     // the failed chunks twice.

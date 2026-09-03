@@ -9,8 +9,8 @@
  * every request, so this job never locks anything — it only reminds.
  */
 import { Group } from "../models/Group.js";
-import { Notification } from "../models/Notification.js";
 import { getGraceInfo, getAmountOwed } from "../services/logic.service.js";
+import { notifyAll } from "../services/notify.service.js";
 
 function isSameCalendarDay(a, b) {
   return (
@@ -48,16 +48,20 @@ export async function runFeeLockReminders() {
         m.status === "active"
     );
 
-    for (const member of recipients) {
-      await Notification.create({
-        userId: member.userId,
+    await notifyAll(
+      recipients.map((m) => m.userId),
+      {
         type: "fee",
         title: "Group fee overdue",
         body: `${group.name}'s monthly fee is ${grace.daysIntoGrace} day(s) overdue. ${grace.daysLeft} day(s) left before the group is locked. Amount owed: K${getAmountOwed(group)}.`,
         groupId: group._id,
         groupName: group.name,
-      });
-    }
+        // The whole group loses access when the grace period runs out, and
+        // only these two can stop it. Worth the credit.
+        sms: true,
+        smsText: `Chuma: ${group.name}'s monthly fee is ${grace.daysIntoGrace} day(s) overdue. K${getAmountOwed(group)} owed, ${grace.daysLeft} day(s) before the group locks.`,
+      }
+    );
 
     // Targeted $set of only the reminder-timestamp field. A full group.save()
     // here would persist every field at its read-time value, clobbering a

@@ -1,5 +1,5 @@
 import { Penalty } from "../models/Penalty.js";
-import { Notification } from "../models/Notification.js";
+import { notify } from "./notify.service.js";
 
 /**
  * Create a penalty (and its member notification) for a violation.
@@ -48,7 +48,7 @@ export async function issuePenalty({
   });
 
   if (member.userId) {
-    await Notification.create({
+    await notify({
       userId: member.userId,
       type: "penalty",
       title: "Penalty issued",
@@ -58,6 +58,10 @@ export async function issuePenalty({
       penaltyId: penalty._id,
       penaltyAmount: amount,
       penaltyReason: reason,
+      // A penalty is a debt they did not choose. Late notice compounds it,
+      // since the rules keep charging while the app sits unopened.
+      sms: true,
+      smsText: `Chuma: A ${reason.toLowerCase()} penalty of K${amount} was issued by ${group.name}. Pay it in the app.`,
     });
   }
 

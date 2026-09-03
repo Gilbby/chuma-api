@@ -1,10 +1,10 @@
 import { Group } from "../models/Group.js";
 import { Loan } from "../models/Loan.js";
 import { Penalty } from "../models/Penalty.js";
-import { Notification } from "../models/Notification.js";
 import { PlatformRevenue } from "../models/PlatformRevenue.js";
 import { Transaction } from "../models/Transaction.js";
 import { advancePaidThrough } from "./logic.service.js";
+import { notify, notifyAll } from "./notify.service.js";
 
 /**
  * Settlement service — the ONLY place payment side effects are applied.
@@ -310,15 +310,20 @@ export async function settleCompletedTransaction(txn) {
         // A cash loan is handed over by the treasurer, not sent anywhere — and
         // it carries no fees, so the borrower gets the whole principal.
         const inCash = txn.paymentMethod === "Cash";
-        await Notification.create({
+        await notify({
           userId: loan.memberId,
           type: "loan",
           title: "Loan disbursed",
           body: inCash
-            ? `Your K${loan.principal} loan was approved — collect the cash from your treasurer. You repay K${loan.outstanding}.`
+            ? `Your K${loan.principal} loan was approved. Collect the cash from your treasurer. You repay K${loan.outstanding}.`
             : `Your K${loan.principal} loan was sent to your mobile wallet as K${net}${fees > 0 ? ` (K${fees.toFixed(2)} in fees)` : ""}. You repay K${loan.outstanding}.`,
           groupId: loan.groupId,
           groupName: loan.groupName,
+          // Money has moved. A cash loan needs them to physically go and get it.
+          sms: true,
+          smsText: inCash
+            ? `Chuma: Your K${loan.principal} loan is approved. Collect the cash from your treasurer. You repay K${loan.outstanding}.`
+            : `Chuma: Your K${loan.principal} loan was sent to your mobile wallet as K${net}. You repay K${loan.outstanding}.`,
         });
       }
       return;
@@ -451,19 +456,29 @@ export async function settleCompletedTransaction(txn) {
       if (txn.memberId) {
         const sent = txn.depositAmount ?? 0;
         const toLoan = Math.max(0, Number(txn.meta?.appliedToLoan) || 0);
-        await Notification.create({
+        await notify({
           userId: txn.memberId,
           type: "governance",
           title: "Removed from group",
           body: `You were removed from ${txn.groupName}. Your K${snapshot} savings were refunded${toLoan > 0 ? ` after K${toLoan} cleared your outstanding loan` : ""}${
             sent > 0
               ? txn.paymentMethod === "Cash"
-                ? ` — collect K${sent} in cash from your treasurer`
-                : ` — K${sent} sent to your mobile wallet`
+                ? `. Collect K${sent} in cash from your treasurer`
+                : `. K${sent} sent to your mobile wallet`
               : ""
           }.`,
           groupId: txn.groupId,
           groupName: txn.groupName,
+          // They are out of the group, so the app may be the last place they
+          // look. Their refund is the part they need to hear about.
+          sms: true,
+          smsText: `Chuma: You were removed from ${txn.groupName}. Your K${snapshot} savings were refunded${
+            sent > 0
+              ? txn.paymentMethod === "Cash"
+                ? `. Collect K${sent} in cash from your treasurer`
+                : `. K${sent} was sent to your mobile wallet`
+              : ""
+          }.`,
         });
       }
       return;
@@ -509,15 +524,21 @@ export async function handleFailedTransaction(txn) {
     txn.type === "loan" || txn.type === "share-out" || txn.type === "withdrawal";
 
   if (txn.memberId) {
-    await Notification.create({
+    await notify({
       userId: txn.memberId,
       type: notifType,
       title: `${label[0].toUpperCase()}${label.slice(1)} failed`,
       body: isPayout
         ? `Your ${label} of K${amount} could not be sent to your wallet. The group admins have been notified to retry.`
-        : `Your ${label} of K${amount} was not completed by your mobile money provider. No balances were changed — please try again.`,
+        : `Your ${label} of K${amount} was not completed by your mobile money provider. No balances were changed. Please try again.`,
       groupId: txn.groupId,
       groupName: txn.groupName,
+      // Money they expected did not arrive, or money they sent did not land.
+      // Either way they will assume the worst until someone tells them.
+      sms: true,
+      smsText: isPayout
+        ? `Chuma: Your ${label} of K${amount} could not reach your wallet. The group admins have been told to retry it.`
+        : `Chuma: Your ${label} of K${amount} did not go through. No balances were changed. Please try again.`,
     });
   }
 
@@ -531,18 +552,22 @@ export async function handleFailedTransaction(txn) {
         m.status === "active" &&
         m.userId
     );
-    for (const admin of admins) {
-      await Notification.create({
-        userId: admin.userId,
+    await notifyAll(
+      admins.map((m) => m.userId),
+      {
         type: notifType,
         title: `${label[0].toUpperCase()}${label.slice(1)} failed`,
-        body: `The ${label} of K${amount} to ${txn.memberName || "a member"} failed at the mobile money provider. Funds were not sent — please retry.`,
+        body: `The ${label} of K${amount} to ${txn.memberName || "a member"} failed at the mobile money provider. Funds were not sent. Please retry.`,
         groupId: txn.groupId,
         groupName: txn.groupName,
         // Lets the app attach a "Retry payout" action to this notification
         transactionId: txn._id,
-      });
-    }
+        // The group's books say this money left. Until an admin retries, it
+        // has not, and only they can fix it.
+        sms: true,
+        smsText: `Chuma: The ${label} of K${amount} to ${txn.memberName || "a member"} failed at the mobile money provider. Open the app to retry it.`,
+      }
+    );
   }
 }
 

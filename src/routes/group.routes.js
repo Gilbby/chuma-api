@@ -34,6 +34,7 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { sendSms } from "../services/sms.service.js";
+import { notify, notifyAll } from "../services/notify.service.js";
 import { settleCompletedTransaction } from "../services/settlement.service.js";
 import config from "../config/index.js";
 
@@ -771,7 +772,7 @@ router.post(
     }
 
     res.json({
-      message: "Fee payment processing — confirm on your phone",
+      message: "Fee payment processing. Confirm on your phone",
       receipt: { receiptId: txn.receiptId, amount, months },
       group: withFeeStatus(group),
     });
@@ -803,7 +804,7 @@ router.post(
     if (!member) return res.status(404).json({ error: "Member not found" });
     if (member.status === "pending")
       return res.status(400).json({
-        error: "That invite hasn't been accepted — withdraw the invite instead",
+        error: "That invite hasn't been accepted. Withdraw the invite instead",
       });
     if (member.status !== "active")
       return res.status(400).json({ error: "Member is not in this group" });
@@ -817,7 +818,7 @@ router.post(
     // This also stops removal being used to unseat the people who vote on it.
     if (ADMIN_ROLES.includes(member.role))
       return res.status(400).json({
-        error: `${member.name} is the group's ${member.role}. An admin cannot be removed — hand the role to someone else first.`,
+        error: `${member.name} is the group's ${member.role}. An admin cannot be removed. Hand the role to someone else first.`,
       });
 
     // Money is leaving the pool, so the same lock that stops contributions and
@@ -897,26 +898,34 @@ router.post(
       requiredApprovals: required,
     });
 
-    await Notification.insertMany(
-      voters.map((v) => ({
-        userId: v.userId,
+    await notifyAll(
+      voters.map((v) => v.userId),
+      {
         type: "governance",
         title: "Member removal proposed",
         body: `${req.user.name} proposed removing ${member.name} from ${group.name}. ${required} approval${required === 1 ? "" : "s"} needed. K${refund} would be refunded to them.`,
         groupId: group._id,
         groupName: group.name,
-      }))
+        // A vote stalls until these people cast it, and the proposal is
+        // holding up someone's money in the meantime.
+        sms: true,
+        smsText: `Chuma: ${req.user.name} proposed removing ${member.name} from ${group.name}. ${required} approval${required === 1 ? "" : "s"} needed. Vote in the app.`,
+      }
     );
 
     // The member hears it from the group, not from the payout landing later.
     if (member.userId) {
-      await Notification.create({
+      await notify({
         userId: member.userId,
         type: "governance",
         title: "Your removal was proposed",
         body: `${req.user.name} proposed removing you from ${group.name}. The group's other admins decide. If it carries, your K${member.savings || 0} savings are refunded${outstanding > 0 ? " after clearing your loan" : ""}.`,
         groupId: group._id,
         groupName: group.name,
+        // They get no vote on this. The least the group owes them is to not
+        // let them find out when the refund lands.
+        sms: true,
+        smsText: `Chuma: ${req.user.name} proposed removing you from ${group.name}. The other admins vote on it. Open the app for details.`,
       });
     }
 

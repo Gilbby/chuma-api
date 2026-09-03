@@ -16,8 +16,8 @@
  * the approval can never disagree about what happened.
  */
 import { Approval } from "../models/Approval.js";
-import { Notification } from "../models/Notification.js";
 import { Transaction } from "../models/Transaction.js";
+import { notify, notifyAll } from "./notify.service.js";
 import { settleCompletedTransaction } from "./settlement.service.js";
 
 /** Cash payments that need acknowledging: a plain contribution, the unified
@@ -72,17 +72,21 @@ export async function raiseCashReceipt({ group, txn, payerName }) {
   const recipients = treasurers.length
     ? treasurers
     : active.filter((m) => m.role === "Chairperson");
-  for (const admin of recipients) {
-    await Notification.create({
-      userId: admin.userId,
+  // SMS as well: nothing is credited until one of these people confirms, and
+  // they are usually holding the notes rather than watching their inbox.
+  await notifyAll(
+    recipients.map((m) => m.userId),
+    {
       type: "contribution",
       title: `Cash ${label} — confirm receipt`,
       body: `${payerName} recorded a K${amount} cash ${label} to ${group.name}. Confirm you received the cash to credit it.`,
       groupId: group._id,
       groupName: group.name,
       transactionId: txn._id,
-    });
-  }
+      sms: true,
+      smsText: `Chuma: ${payerName} says they handed you K${amount} cash for ${group.name}. Confirm it in the app to credit their account.`,
+    }
+  );
 
   return approval;
 }
@@ -141,16 +145,21 @@ export async function resolveCashReceipt({ txn, admin, received }) {
   // two, since their money is somewhere and their savings are not.
   if (updated.memberId && String(updated.memberId) !== String(admin.userId)) {
     const label = labelFor(updated);
-    await Notification.create({
+    const paid = Math.abs(updated.amount);
+    await notify({
       userId: updated.memberId,
       type: "contribution",
       title: received ? `Cash ${label} confirmed` : `Cash ${label} declined`,
       body: received
-        ? `${admin.name} confirmed receiving your K${Math.abs(updated.amount)} cash ${label}. Your account has been updated.`
-        : `${admin.name} declined your K${Math.abs(updated.amount)} cash ${label} — the cash was not received. Please speak to your treasurer.`,
+        ? `${admin.name} confirmed receiving your K${paid} cash ${label}. Your account has been updated.`
+        : `${admin.name} declined your K${paid} cash ${label}. The cash was not received. Please speak to your treasurer.`,
       groupId: updated.groupId,
       groupName: updated.groupName,
       transactionId: updated._id,
+      sms: true,
+      smsText: received
+        ? `Chuma: ${admin.name} confirmed your K${paid} cash ${label}. Your account is updated.`
+        : `Chuma: ${admin.name} declined your K${paid} cash ${label}. The cash was not received. Speak to your treasurer.`,
     });
   }
 

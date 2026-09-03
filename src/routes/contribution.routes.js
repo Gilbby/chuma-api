@@ -156,7 +156,7 @@ router.post(
         transaction: txn,
         approval,
         pricing: breakdown,
-        message: "Recorded — awaiting treasurer confirmation of cash receipt",
+        message: "Recorded. Awaiting treasurer confirmation of cash receipt",
       });
     }
 

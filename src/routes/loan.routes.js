@@ -3,7 +3,7 @@ import { Group } from "../models/Group.js";
 import { Loan } from "../models/Loan.js";
 import { Approval } from "../models/Approval.js";
 import { Transaction } from "../models/Transaction.js";
-import { Notification } from "../models/Notification.js";
+import { notifyAll } from "../services/notify.service.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth, requireRealName, hasRealName } from "../middleware/auth.js";
 import {
@@ -134,7 +134,7 @@ router.post(
     // lend more than the cash it actually holds.
     if (amount > (group.walletBalance || 0))
       return res.status(400).json({
-        error: `Group wallet only holds K${group.walletBalance || 0} — it cannot cover a K${amount} loan yet.`,
+        error: `Group wallet only holds K${group.walletBalance || 0}. It cannot cover a K${amount} loan yet.`,
       });
 
     // A loan must be fully repaid before the cycle closes. Lending stops inside
@@ -192,17 +192,18 @@ router.post(
     const admins = group.members.filter((m) =>
       ["Chairperson", "Treasurer", "Secretary"].includes(m.role)
     );
-    await Notification.insertMany(
-      admins
-        .filter((a) => a.userId)
-        .map((a) => ({
-          userId: a.userId,
-          type: "loan",
-          title: "Loan approval needed",
-          body: `${req.user.name} requested a loan of K${amount} in ${group.name}.`,
-          groupId,
-          groupName: group.name,
-        }))
+    await notifyAll(
+      admins.map((a) => a.userId),
+      {
+        type: "loan",
+        title: "Loan approval needed",
+        body: `${req.user.name} requested a loan of K${amount} in ${group.name}.`,
+        groupId,
+        groupName: group.name,
+        // The borrower is waiting on this vote and cannot chase it themselves.
+        sms: true,
+        smsText: `Chuma: ${req.user.name} requested a K${amount} loan in ${group.name}. Your approval is needed. Vote in the app.`,
+      }
     );
 
     // Preview what the borrower will actually RECEIVE at disbursement: all fees
@@ -307,7 +308,7 @@ router.post(
         loan,
         transaction: txn,
         approval,
-        message: "Recorded — awaiting an admin's confirmation of the cash",
+        message: "Recorded. Awaiting an admin's confirmation of the cash",
       });
     }
 

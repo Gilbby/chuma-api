@@ -2,7 +2,7 @@ import express from "express";
 import { Group } from "../models/Group.js";
 import { Penalty } from "../models/Penalty.js";
 import { Approval } from "../models/Approval.js";
-import { Notification } from "../models/Notification.js";
+import { notifyAll } from "../services/notify.service.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
 import {
@@ -141,17 +141,18 @@ router.post(
     const admins = group.members.filter((m) =>
       ["Chairperson", "Treasurer", "Secretary"].includes(m.role)
     );
-    await Notification.insertMany(
-      admins
-        .filter((a) => a.userId)
-        .map((a) => ({
-          userId: a.userId,
-          type: "governance",
-          title: "Share-out approval needed",
-          body: `${req.user.name} proposed a share-out of K${result.totalToDistribute} in ${group.name}.`,
-          groupId: group._id,
-          groupName: group.name,
-        }))
+    await notifyAll(
+      admins.map((a) => a.userId),
+      {
+        type: "governance",
+        title: "Share-out approval needed",
+        body: `${req.user.name} proposed a share-out of K${result.totalToDistribute} in ${group.name}.`,
+        groupId: group._id,
+        groupName: group.name,
+        // End of cycle. Every member's payout waits on this vote.
+        sms: true,
+        smsText: `Chuma: ${req.user.name} proposed a K${result.totalToDistribute} share-out in ${group.name}. Your approval is needed. Vote in the app.`,
+      }
     );
 
     res.status(201).json({ approval });

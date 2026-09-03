@@ -19,7 +19,7 @@ import { config } from "../config/index.js";
 export const isMobileMoneyOnHold = () => config.payments.mobileMoneyHold;
 
 export const MOBILE_MONEY_HOLD_MESSAGE =
-  "Mobile money is paused for now — this payment has to be cash, confirmed by an admin.";
+  "Mobile money is paused for now. This payment has to be cash, confirmed by an admin.";
 
 /**
  * Guard for a member-money route: returns a 503 body when the caller asked to
