@@ -30,6 +30,7 @@ import {
 } from "../services/pawapay.service.js";
 import { issuePenalty } from "../services/penalty.service.js";
 import { raiseCashReceipt } from "../services/cashReceipt.service.js";
+import { confirmManualPayout } from "../services/manualPayout.service.js";
 import {
   rejectIfMobileMoneyHeld,
   isMobileMoneyOnHold,
@@ -601,6 +602,73 @@ const PAYOUT_DESCRIPTIONS = {
   "share-out": "Chuma share out",
   withdrawal: "Chuma refund",
 };
+
+/**
+ * POST /api/transactions/:id/confirm-payout  (auth, treasurer/chairperson)
+ * Body: { paymentMethod?: "Cash" | "MTN MoMo" | "Airtel Money" | "Zamtel Kwacha" | "Bank Transfer" }
+ *
+ * Mark a payout the group settled OUTSIDE the app as paid — notes across a
+ * table, mobile money sent from the treasurer's own phone, a bank transfer.
+ * Settling it is what retires the member's stake AND what sends them their
+ * receipt, so until an admin taps this the member is still owed the money and
+ * the app says exactly that.
+ *
+ * The TREASURER does this. They hold the group's money, they are the one who
+ * actually pays each member, and they are the only person who can honestly say
+ * it left. The chairperson stands in only when the group has no active
+ * treasurer — the same fallback raiseCashReceipt uses for money coming in,
+ * because a group between treasurers must not have its share-out frozen.
+ */
+router.post(
+  "/transactions/:id/confirm-payout",
+  requireAuth,
+  paymentLimiter,
+  asyncHandler(async (req, res) => {
+    const txn = await Transaction.findById(req.params.id);
+    if (!txn) return res.status(404).json({ error: "Transaction not found" });
+
+    const group = await Group.findById(txn.groupId).lean();
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    const me = group.members.find(
+      (m) => String(m.userId) === String(req.userId) && m.status === "active"
+    );
+    const hasTreasurer = group.members.some(
+      (m) => m.status === "active" && m.role === "Treasurer"
+    );
+    const allowed =
+      me?.role === "Treasurer" || (me?.role === "Chairperson" && !hasTreasurer);
+    if (!allowed)
+      return res.status(403).json({
+        error: hasTreasurer
+          ? "Only the treasurer can mark a member paid"
+          : "Only the treasurer or, while the group has none, the chairperson can mark a member paid",
+      });
+
+    // How they paid is optional and free-form within the enum: the ledger is
+    // better for knowing, but a treasurer who does not say still paid.
+    const METHODS = [
+      "Cash",
+      "Mobile Money",
+      "MTN MoMo",
+      "Airtel Money",
+      "Zamtel Kwacha",
+      "Bank Transfer",
+    ];
+    const paymentMethod = req.body?.paymentMethod;
+    if (paymentMethod && !METHODS.includes(paymentMethod))
+      return res.status(400).json({ error: "Unknown payment method" });
+
+    const result = await confirmManualPayout({
+      txn,
+      admin: { userId: req.userId, name: req.user.name },
+      paymentMethod,
+    });
+    if (result.error)
+      return res.status(result.status || 400).json({ error: result.error });
+
+    res.json({ transaction: result.transaction });
+  })
+);
 
 /**
  * POST /api/transactions/:id/retry-payout  (auth, treasurer/chairperson)

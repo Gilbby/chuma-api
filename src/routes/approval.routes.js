@@ -571,7 +571,11 @@ async function executeApproval(approval, req) {
     const group = await Group.findById(approval.groupId);
     if (!group) return null;
     try {
-      const result = await distributeShareOut(group);
+      // The method the group voted for travels with the approval, so the run
+      // pays the way the ballot said it would.
+      const result = await distributeShareOut(group, {
+        method: approval.payoutMethod,
+      });
       // One-shot action: mark executed so it can never distribute twice
       await Approval.updateOne({ _id: approval._id }, { status: "executed" });
       approval.status = "executed";

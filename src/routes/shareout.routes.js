@@ -8,15 +8,18 @@ import { requireAuth } from "../middleware/auth.js";
 import {
   requireGroupMember,
   requireGroupAdmin,
+  ADMIN_ROLES,
 } from "../middleware/groupAuth.js";
 import {
   computeShareOut,
   estimateGroupProfit,
   computeLoanNetting,
   getRequiredApprovals,
-  countAdmins,
 } from "../services/logic.service.js";
 import { Loan } from "../models/Loan.js";
+import { Transaction } from "../models/Transaction.js";
+import { awaitsConfirmation } from "../services/manualPayout.service.js";
+import { isMobileMoneyOnHold } from "../utils/paymentHold.js";
 import { distributeShareOut } from "../services/shareout.service.js";
 
 const router = express.Router();
@@ -82,9 +85,121 @@ router.get(
 );
 
 /**
- * POST /api/shareout/:groupId/propose  (auth)
- * Creates a pending share-out Approval routed to admins instead of paying
- * out immediately. Only one pending share-out approval per group at a time.
+ * GET /api/shareout/:groupId/payouts  (auth, member)
+ * The state of the group's most recent distribution, member by member: who has
+ * been paid, who is still owed, and who is waiting on a provider.
+ *
+ * Every member sees this, not just admins. A share-out where only the treasurer
+ * can see who has been paid is the exact ledger a VSLA meets in person to
+ * avoid — and a member who has NOT been handed their money needs a row to point
+ * at that says so.
+ *
+ * Also reports whether the mobile money hold is on, which is what decides
+ * whether the next proposal gets to choose a method at all.
+ */
+router.get(
+  "/:groupId/payouts",
+  requireAuth,
+  requireGroupMember("groupId"),
+  asyncHandler(async (req, res) => {
+    // The latest run, found through its own transactions: one distribution
+    // stamps every transaction it writes with the same meta.shareOutId.
+    const latest = await Transaction.findOne({
+      groupId: req.group._id,
+      type: "share-out",
+      "meta.shareOutId": { $exists: true },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const mobileMoneyHold = isMobileMoneyOnHold();
+
+    if (!latest)
+      return res.json({
+        shareOutId: null,
+        payouts: [],
+        totals: null,
+        method: null,
+        mobileMoneyHold,
+      });
+
+    const rows = await Transaction.find({
+      groupId: req.group._id,
+      type: "share-out",
+      "meta.shareOutId": latest.meta.shareOutId,
+    })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const payouts = rows.map((t) => {
+      const owed = Math.abs(t.amount);
+      const handed = t.depositAmount ?? owed;
+      return {
+        transactionId: String(t._id),
+        memberId: t.memberId ? String(t.memberId) : null,
+        memberName: t.memberName,
+        owed,
+        amount: handed, // what they actually get, after their own loan is netted
+        appliedToLoan: Math.max(0, owed - handed),
+        status: t.status,
+        paymentMethod: t.paymentMethod || null,
+        // Waiting on a person to pay and say so, vs waiting on pawaPay. That
+        // difference is the point of this screen: only the first has a button.
+        awaitsConfirmation: awaitsConfirmation(t),
+        viaMobileMoney: !!t.pawapay?.transfers?.length,
+        confirmedByName: t.meta?.cashConfirmedByName || null,
+        confirmedAt: t.meta?.cashConfirmedAt || null,
+        receiptId: t.receiptId,
+        date: t.createdAt,
+      };
+    });
+
+    const totals = {
+      count: payouts.length,
+      paid: payouts.filter((p) => p.status === "completed").length,
+      pending: payouts.filter((p) => p.status === "pending").length,
+      failed: payouts.filter((p) => p.status === "failed").length,
+      outstanding: payouts
+        .filter((p) => p.status === "pending")
+        .reduce((sum, p) => sum + p.amount, 0),
+    };
+
+    res.json({
+      shareOutId: String(latest.meta.shareOutId),
+      payouts,
+      totals,
+      // How THIS run paid, read off the transactions rather than the approval:
+      // the approval records an intention, the transactions record what
+      // actually happened when the hold had its say.
+      method: payouts.some((p) => p.viaMobileMoney) ? "mobile-money" : "manual",
+      mobileMoneyHold,
+    });
+  })
+);
+
+/**
+ * POST /api/shareout/:groupId/propose  (auth, CHAIRPERSON only)
+ * Body: { method?: "manual" | "mobile-money" }
+ * Creates a pending share-out Approval routed to the other admins instead of
+ * paying out immediately. Only one pending share-out per group at a time.
+ *
+ * The chairperson alone initiates. Ending a cycle is the single largest thing a
+ * group does — it empties the pool and closes everyone's savings — so it starts
+ * with the person the group elected to hold that decision, not with whoever
+ * happens to open the screen. The treasurer and secretary then approve it, and
+ * approval must be UNANIMOUS across the group's active admins: there is no
+ * majority worth having when the whole pot is being handed out.
+ *
+ * The method is chosen here and fixed for the whole run, because it decides
+ * what the admins are actually voting for: a MANUAL run commits the group to
+ * paying every member themselves — notes, the treasurer's own mobile money, a
+ * bank transfer — and confirming each one, while a mobile money run is one vote
+ * and then pawaPay does the rest. It goes in the description so nobody approves
+ * a fortnight of paying people by hand without meaning to.
+ *
+ * While the mobile money hold is on there is no choice to make — pawaPay
+ * disbursement cannot pay anyone — so a request for it is corrected to manual
+ * rather than refused. The group still gets its share-out.
  */
 router.post(
   "/:groupId/propose",
@@ -92,6 +207,11 @@ router.post(
   requireGroupMember("groupId"),
   asyncHandler(async (req, res) => {
     const group = req.group;
+    if (req.member.role !== "Chairperson")
+      return res
+        .status(403)
+        .json({ error: "Only the chairperson can start a share-out" });
+
     const existing = await Approval.exists({
       groupId: group._id,
       type: "share-out",
@@ -120,33 +240,53 @@ router.post(
 
     const result = computeShareOut(members, profit);
 
-    const required = getRequiredApprovals(
-      group.constitution?.approvalThreshold || "majority",
-      countAdmins(group.members)
+    // Unanimous, and counted over ACTIVE admins only: an invited treasurer who
+    // has not accepted yet cannot vote, so counting them would set a bar the
+    // group can never reach. A group whose only admin is the chairperson needs
+    // one approval — their own — which their initiating vote supplies.
+    const activeAdmins = group.members.filter(
+      (m) => m.status === "active" && ADMIN_ROLES.includes(m.role)
     );
+    const required = getRequiredApprovals("all", activeAdmins.length);
+
+    const held = isMobileMoneyOnHold();
+    const asked = req.body?.method;
+    if (asked && !["manual", "mobile-money"].includes(asked))
+      return res
+        .status(400)
+        .json({ error: "Method must be manual or mobile-money" });
+    // Manual is the default as well as the fallback: it is the one method that
+    // works whatever pawaPay is doing.
+    const payoutMethod = held || asked !== "mobile-money" ? "manual" : "mobile-money";
+    const methodLine =
+      payoutMethod === "manual"
+        ? "The group pays each member directly and confirms each one in the app."
+        : "Paid to members' mobile money wallets automatically once approved.";
 
     const approval = await Approval.create({
       groupId: group._id,
       groupName: group.name,
       type: "share-out",
       title: `Share-out distribution — ${group.name}`,
-      description: `Approve end-of-cycle distribution of K${result.totalToDistribute} to members.`,
+      description: `Approve end-of-cycle distribution of K${result.totalToDistribute} to members. ${methodLine}`,
       amount: result.totalToDistribute,
       requestedById: req.userId,
       requestedBy: req.user.name,
       requiredApprovals: required,
+      payoutMethod,
     });
 
-    // Notify admins
-    const admins = group.members.filter((m) =>
-      ["Chairperson", "Treasurer", "Secretary"].includes(m.role)
+    // Everyone whose approval is still needed — not the chairperson, who is
+    // the one asking and whose vote is cast by the same tap.
+    const toAsk = activeAdmins.filter(
+      (m) => String(m.userId) !== String(req.userId)
     );
     await notifyAll(
-      admins.map((a) => a.userId),
+      toAsk.map((a) => a.userId),
       {
         type: "governance",
         title: "Share-out approval needed",
-        body: `${req.user.name} proposed a share-out of K${result.totalToDistribute} in ${group.name}.`,
+        body: `${req.user.name} proposed a share-out of K${result.totalToDistribute} in ${group.name}, paid ${payoutMethod === "manual" ? "directly by the group" : "by mobile money"}.`,
         groupId: group._id,
         groupName: group.name,
         // End of cycle. Every member's payout waits on this vote.
@@ -155,7 +295,13 @@ router.post(
       }
     );
 
-    res.status(201).json({ approval });
+    res.status(201).json({
+      approval,
+      // Say so when the request was overridden, rather than letting the screen
+      // show a mobile money run that is quietly going to be cash.
+      method: payoutMethod,
+      mobileMoneyHold: held,
+    });
   })
 );
 
@@ -185,7 +331,9 @@ router.post(
       });
 
     try {
-      const { payouts, summary } = await distributeShareOut(req.group);
+      const { payouts, summary } = await distributeShareOut(req.group, {
+        method: approval.payoutMethod,
+      });
       res.json({ message: "Share-out distributed", payouts, summary });
     } catch (err) {
       if (err.status === 409) {

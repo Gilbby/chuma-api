@@ -59,6 +59,11 @@ const transactionSchema = new Schema(
         "Zamtel Kwacha",
         "Bank Transfer",
         "Cash",
+        // Generic, network-unknown mobile money: a payout the GROUP sent from
+        // its own phone rather than through pawaPay. We know it was mobile
+        // money because the treasurer said so; we do not know whose network,
+        // and it would be worse to guess than to record it plainly.
+        "Mobile Money",
       ],
     },
 

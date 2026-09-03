@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Penalty } from "../models/Penalty.js";
 import { Transaction } from "../models/Transaction.js";
 import { Loan } from "../models/Loan.js";
@@ -10,6 +11,7 @@ import {
 import { initiatePayout, providerFromPhone } from "./pawapay.service.js";
 import { pricePayout } from "./pricing.service.js";
 import { isMobileMoneyOnHold } from "../utils/paymentHold.js";
+import { notify, notifyAll } from "./notify.service.js";
 import { config } from "../config/index.js";
 import {
   settleCompletedTransaction,
@@ -17,11 +19,23 @@ import {
 } from "./settlement.service.js";
 
 /**
- * Pays each active member their share of the group's pool via PawaPay payout,
- * records share-out Transactions, then resets the cycle (zeroes savings /
- * contributions / totalSavings / cycleProgress) and saves the group.
+ * Pays each active member their share of the group's pool and records a
+ * share-out Transaction per member. Each member's stake is retired — savings,
+ * contributions, totalSavings, wallet — only when THEIR transaction settles,
+ * and the cycle closes (cycleProgress = 0) when the last one does.
+ *
+ * How a payout settles depends on who can tell us it landed:
+ *   pawaPay → transaction is pending until the payout webhook says COMPLETED
+ *   manual  → transaction is pending until an admin confirms they paid the
+ *             member (confirmManualPayout), because nothing else ever will
+ *
+ * `method` is what the group chose when it proposed this distribution
+ * ("manual" or "mobile-money"), carried on the approval members voted through.
+ *
+ * Every transaction from one run shares a meta.shareOutId so the payouts screen
+ * can show that distribution as a single list of who has been paid.
  */
-export async function distributeShareOut(group) {
+export async function distributeShareOut(group, { method } = {}) {
   const [penaltyRow] = await Penalty.aggregate([
     {
       $match: {
@@ -86,6 +100,18 @@ export async function distributeShareOut(group) {
     throw err;
   }
 
+  // Every transaction this run writes carries the same id, so the payouts
+  // screen shows ONE distribution — who has been paid and who is still owed —
+  // instead of every share-out the group has ever run.
+  const shareOutId = new mongoose.Types.ObjectId();
+
+  // How this run pays. The group chose when it proposed, but the hold always
+  // wins: a run approved for mobile money while pawaPay disbursement is down
+  // would strand every member behind a payout that cannot happen. An approval
+  // with no method recorded (proposed before the choice existed) is paid
+  // manually — the option that cannot send real money to the wrong place.
+  const payManually = isMobileMoneyOnHold() || method !== "mobile-money";
+
   // Leg A — repay each open loan out of the borrower's share, reusing the
   // tested repayment settlement (decrements loanCirculation, marks the loan
   // repaid). No real cash moves; the debt is offset against the payout below.
@@ -123,6 +149,8 @@ export async function distributeShareOut(group) {
   // already returned the netted cash to the wallet, so the two net to the cash
   // we actually send (share − debt).
   const payouts = [];
+  // Members owed money the group has not paid out yet — the treasurer's list.
+  const awaitingPayment = [];
   for (const m of activeMembers) {
     const calc = result.members.find(
       (r) => r.id === String(m.userId || m._id)
@@ -144,18 +172,28 @@ export async function distributeShareOut(group) {
         status: "completed",
         note: "Cycle share-out (fully applied to loan)",
         receiptId: generateReceiptId("CHM"),
-        meta: { memberSavings: m.savings },
+        meta: { memberSavings: m.savings, shareOutId },
       });
       await settleCompletedTransaction(txn);
       payouts.push({ member: m.name, owed: calc.share, sent: 0, appliedToLoan: calc.share });
       continue;
     }
 
-    // Mobile money on hold: the group pays each member their share in cash.
-    // Nothing is deducted — there is no payout to be charged for, and no
-    // platform fee we could take out of notes — so the member receives the
-    // whole net share and the cycle closes as the record is written.
-    if (isMobileMoneyOnHold()) {
+    // A manual run: the group moves the money itself — notes across a table,
+    // mobile money from the treasurer's own phone, a bank transfer. Nothing is
+    // deducted, because there is no payout for us to charge for and no fee we
+    // could take out of a payment we never touch, so the member receives their
+    // whole net share.
+    //
+    // paymentMethod is deliberately left unset. HOW the group pays is not known
+    // until they have paid; the admin records it when they confirm.
+    //
+    // The transaction is PENDING, not completed. Money does not move because
+    // a vote passed; it moves when the treasurer actually pays someone, and
+    // only an admin can tell us that happened (confirmManualPayout). Marking it
+    // completed here would zero every member's savings at once and leave the
+    // treasurer no record of who they had really paid.
+    if (payManually) {
       const txn = await Transaction.create({
         groupId: group._id,
         groupName: group.name,
@@ -165,20 +203,37 @@ export async function distributeShareOut(group) {
         amount: calc.share, // full owed — what settlement decrements from the pool
         depositAmount: netCash, // what the member is handed
         platformFee: 0,
-        paymentMethod: "Cash",
-        status: "completed",
-        note: "Cycle share-out (cash)",
+        status: "pending",
+        note: "Cycle share-out (paid outside the app)",
         receiptId: generateReceiptId("CHM"),
-        meta: { memberSavings: m.savings },
+        meta: { memberSavings: m.savings, shareOutId },
       });
-      await settleCompletedTransaction(txn);
+      // The vote passing is news, not money. It goes in their inbox and stops
+      // there — NO SMS. The one message that leaves the building about this
+      // payout is the completion receipt (confirmManualPayout), sent after the
+      // money has actually reached them. Telling a member to expect money that
+      // has not moved yet is how a group stops believing the app.
+      if (m.userId) {
+        awaitingPayment.push({ userId: m.userId, name: m.name, amount: netCash });
+        await notify({
+          userId: m.userId,
+          type: "governance",
+          title: "Share-out approved",
+          body: `The ${group.name} share-out was approved. Your K${netCash} is being paid out — you will get a receipt here the moment it is done.`,
+          groupId: group._id,
+          groupName: group.name,
+          transactionId: txn._id,
+        });
+      }
       payouts.push({
         member: m.name,
         owed: calc.share,
         appliedToLoan: calc.share - netCash,
         sent: netCash,
         fees: 0,
-        method: "cash",
+        method: "manual",
+        status: "pending",
+        transactionId: txn._id,
       });
       continue;
     }
@@ -236,7 +291,7 @@ export async function distributeShareOut(group) {
         transfers: payout.transfers, // ≥1 transfer; parent settles when all COMPLETE
         status: payout.status,
       },
-      meta: { memberSavings: m.savings },
+      meta: { memberSavings: m.savings, shareOutId },
     });
     if (txn.status === "completed") await settleCompletedTransaction(txn);
     else if (rejected) await handleFailedTransaction(txn);
@@ -251,7 +306,29 @@ export async function distributeShareOut(group) {
     });
   }
 
-  return { payouts, netted, summary: result };
+  // The treasurer is the one who actually has to move this money, member by
+  // member, however they choose to move it. Give them the headcount and the
+  // total up front rather than letting them discover it one row at a time.
+  if (awaitingPayment.length) {
+    const total = awaitingPayment.reduce((sum, a) => sum + a.amount, 0);
+    const admins = group.members.filter(
+      (m) => m.status === "active" && m.userId && (m.role === "Treasurer" || m.role === "Chairperson")
+    );
+    await notifyAll(
+      admins.map((m) => m.userId),
+      {
+        type: "governance",
+        title: "Share-out ready to pay out",
+        body: `${awaitingPayment.length} member${awaitingPayment.length === 1 ? "" : "s"} are owed K${total} in the ${group.name} share-out. Pay them however the group agreed, and mark each one paid here as you go.`,
+        groupId: group._id,
+        groupName: group.name,
+        sms: true,
+        smsText: `Chuma: ${awaitingPayment.length} members are owed K${total} in the ${group.name} share-out. Mark each one paid in the app as you pay them.`,
+      }
+    );
+  }
+
+  return { payouts, netted, summary: result, shareOutId };
 }
 
 export default { distributeShareOut };

@@ -51,6 +51,17 @@ const approvalSchema = new Schema(
     targetUserId: { type: Schema.Types.ObjectId, ref: "User" },
     targetName: { type: String },
 
+    // How a share-out approval will pay members, chosen when it is proposed
+    // and fixed for that whole run. Voters are approving a method as much as an
+    // amount: "manual" commits the group to paying every member themselves —
+    // notes, their own mobile money, a bank transfer — and confirming each one
+    // in the app; "mobile-money" is one approval and then pawaPay does the
+    // rest. The mobile money hold overrides it either way — see paymentHold.js.
+    payoutMethod: {
+      type: String,
+      enum: ["manual", "mobile-money"],
+    },
+
     requiredApprovals: { type: Number, default: 2 },
     votes: [voteSchema],
 
