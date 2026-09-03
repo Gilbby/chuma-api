@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import { Group } from "../models/Group.js";
 import { Approval } from "../models/Approval.js";
 import { notifyAll } from "../services/notify.service.js";
@@ -84,6 +85,43 @@ const isRunClosed = (payouts) =>
  */
 const methodOf = (payouts) =>
   payouts.some((p) => p.viaMobileMoney) ? "mobile-money" : "manual";
+
+/**
+ * Every share-out this group has ever run, as two numbers.
+ *
+ * The receipt line on the share-out screen is read by a group that may have
+ * closed a dozen cycles, so naming only the most recent one buries the rest —
+ * and "we have done this three times and K132,000 has come back to us" is the
+ * thing a member actually wants off that line. Runs are counted over distinct
+ * distributions and money only where it actually moved, so the totals
+ * reconcile with /history row for row.
+ */
+async function historySummaryFor(groupId) {
+  const [summary] = await Transaction.aggregate([
+    {
+      $match: { groupId, type: "share-out", "meta.shareOutId": { $exists: true } },
+    },
+    {
+      $group: {
+        _id: null,
+        runIds: { $addToSet: "$meta.shareOutId" },
+        totalDistributed: {
+          $sum: {
+            $cond: [
+              { $eq: ["$status", "completed"] },
+              { $ifNull: ["$depositAmount", { $abs: "$amount" }] },
+              0,
+            ],
+          },
+        },
+      },
+    },
+  ]);
+  return {
+    runs: summary?.runIds.length ?? 0,
+    totalDistributed: summary?.totalDistributed ?? 0,
+  };
+}
 
 /** When the last member was settled. Falls back to the last row written. */
 const settledAtOf = (payouts) =>
@@ -188,6 +226,7 @@ router.get(
       totals: null,
       method: null,
       lastCompleted: null,
+      history: null,
       mobileMoneyHold,
     };
 
@@ -216,6 +255,9 @@ router.get(
           totalPaid: payouts.reduce((sum, p) => sum + p.amount, 0),
           method: methodOf(payouts),
         },
+        // Only costs a query on the screen that shows it — a group mid-run is
+        // being told about this run, not about the ten before it.
+        history: await historySummaryFor(req.group._id),
       });
 
     res.json({
@@ -224,15 +266,43 @@ router.get(
       totals: totalsFor(payouts),
       method: methodOf(payouts),
       lastCompleted: null,
+      history: null,
       mobileMoneyHold,
     });
   })
 );
 
 /**
+ * One run's headline figures, from its payout rows.
+ *
+ * The member-by-member detail is deliberately NOT included: a group of forty
+ * with a decade of cycles behind it would otherwise ship several hundred payout
+ * rows to draw a list of twelve, and the reader opens one run at a time. The
+ * detail is served per run by /history/:shareOutId.
+ */
+function summariseRun(shareOutId, startedAt, payouts) {
+  const closed = isRunClosed(payouts);
+  return {
+    shareOutId: String(shareOutId),
+    startedAt,
+    // Null while a run is still being paid — the one on the share-out
+    // screen appears here too, marked open, rather than going missing.
+    completedAt: closed ? settledAtOf(payouts) : null,
+    closed,
+    method: methodOf(payouts),
+    memberCount: payouts.length,
+    totalOwed: payouts.reduce((sum, p) => sum + p.owed, 0),
+    totalPaid: payouts
+      .filter((p) => p.status === "completed")
+      .reduce((sum, p) => sum + p.amount, 0),
+    totalAppliedToLoans: payouts.reduce((sum, p) => sum + p.appliedToLoan, 0),
+    totals: totalsFor(payouts),
+  };
+}
+
+/**
  * GET /api/shareout/:groupId/history  (auth, member)  ?limit=12
- * Every distribution this group has run, newest first, each with its full
- * member-by-member detail.
+ * Every distribution this group has run, newest first, as summary rows.
  *
  * This is where a finished share-out goes to live. The share-out screen only
  * ever shows the run in progress, so without somewhere permanent to read it,
@@ -276,29 +346,57 @@ router.get(
     const byRun = new Map(runIds.map((r) => [String(r._id), []]));
     for (const t of rows) byRun.get(String(t.meta.shareOutId))?.push(toPayoutRow(t));
 
-    const runs = runIds.map((r) => {
-      const payouts = byRun.get(String(r._id)) ?? [];
-      const closed = isRunClosed(payouts);
-      return {
-        shareOutId: String(r._id),
-        startedAt: r.startedAt,
-        // Null while a run is still being paid — the one on the share-out
-        // screen appears here too, marked open, rather than going missing.
-        completedAt: closed ? settledAtOf(payouts) : null,
-        closed,
-        method: methodOf(payouts),
-        memberCount: payouts.length,
-        totalOwed: payouts.reduce((sum, p) => sum + p.owed, 0),
-        totalPaid: payouts
-          .filter((p) => p.status === "completed")
-          .reduce((sum, p) => sum + p.amount, 0),
-        totalAppliedToLoans: payouts.reduce((sum, p) => sum + p.appliedToLoan, 0),
-        totals: totalsFor(payouts),
-        payouts,
-      };
-    });
+    const runs = runIds.map((r) =>
+      summariseRun(r._id, r.startedAt, byRun.get(String(r._id)) ?? [])
+    );
 
     res.json({ runs });
+  })
+);
+
+/**
+ * GET /api/shareout/:groupId/history/:shareOutId  (auth, member)
+ * One distribution in full: its headline figures and every member's payout.
+ *
+ * A run of forty members is a screen of its own, not something to unfold inside
+ * a list — so the list asks for this the moment a member opens a row, and only
+ * ever carries the rows they actually opened.
+ */
+router.get(
+  "/:groupId/history/:shareOutId",
+  requireAuth,
+  requireGroupMember("groupId"),
+  asyncHandler(async (req, res) => {
+    // meta is a Mixed field, so Mongoose casts nothing on the way in: the id
+    // written by the distribution is an ObjectId and a string from the URL
+    // would silently match nothing. Match both, in case an older run ever
+    // stamped a plain string.
+    const raw = String(req.params.shareOutId);
+    const ids = mongoose.Types.ObjectId.isValid(raw)
+      ? [new mongoose.Types.ObjectId(raw), raw]
+      : [raw];
+
+    const rows = await Transaction.find({
+      groupId: req.group._id,
+      type: "share-out",
+      "meta.shareOutId": { $in: ids },
+    })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    // A share-out id that belongs to another group hits this too: the member
+    // filter above means it simply has no rows here, and "no such run" is the
+    // right answer either way.
+    if (!rows.length)
+      return res.status(404).json({ error: "Share-out not found for this group" });
+
+    const payouts = rows.map(toPayoutRow);
+    res.json({
+      run: {
+        ...summariseRun(req.params.shareOutId, rows[0].createdAt, payouts),
+        payouts,
+      },
+    });
   })
 );
 
