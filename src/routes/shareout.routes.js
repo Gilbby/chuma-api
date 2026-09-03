@@ -1,6 +1,5 @@
 import express from "express";
 import { Group } from "../models/Group.js";
-import { Penalty } from "../models/Penalty.js";
 import { Approval } from "../models/Approval.js";
 import { notifyAll } from "../services/notify.service.js";
 import { asyncHandler } from "../middleware/error.js";
@@ -20,18 +19,80 @@ import { Loan } from "../models/Loan.js";
 import { Transaction } from "../models/Transaction.js";
 import { awaitsConfirmation } from "../services/manualPayout.service.js";
 import { isMobileMoneyOnHold } from "../utils/paymentHold.js";
-import { distributeShareOut } from "../services/shareout.service.js";
+import {
+  distributeShareOut,
+  getPenaltyIncome,
+} from "../services/shareout.service.js";
 
 const router = express.Router();
 
-/** Sum paid group-pool penalties in the database instead of loading them all. */
-async function getPenaltyIncome(groupId) {
-  const [row] = await Penalty.aggregate([
-    { $match: { groupId, status: "paid", fundsDestination: "group-pool" } },
-    { $group: { _id: null, total: { $sum: "$amount" } } },
-  ]);
-  return row?.total || 0;
+/**
+ * One share-out transaction as a payout row: what the member was owed, what
+ * they are actually handed, and who we are waiting on for it.
+ */
+function toPayoutRow(t) {
+  const owed = Math.abs(t.amount);
+  const handed = t.depositAmount ?? owed;
+  return {
+    transactionId: String(t._id),
+    memberId: t.memberId ? String(t.memberId) : null,
+    memberName: t.memberName,
+    owed,
+    amount: handed, // what they actually get, after their own loan is netted
+    appliedToLoan: Math.max(0, owed - handed),
+    status: t.status,
+    paymentMethod: t.paymentMethod || null,
+    // Waiting on a person to pay and say so, vs waiting on pawaPay. That
+    // difference is the point of this screen: only the first has a button.
+    awaitsConfirmation: awaitsConfirmation(t),
+    viaMobileMoney: !!t.pawapay?.transfers?.length,
+    // Manual payouts stamp meta.confirmedBy* (manualPayout.service); the
+    // cash* names belong to money coming IN. Read both, or a payout the
+    // treasurer confirmed shows up with nobody's name against it.
+    confirmedByName: t.meta?.confirmedByName || t.meta?.cashConfirmedByName || null,
+    confirmedAt: t.meta?.confirmedAt || t.meta?.cashConfirmedAt || null,
+    receiptId: t.receiptId,
+    date: t.createdAt,
+  };
 }
+
+function totalsFor(payouts) {
+  return {
+    count: payouts.length,
+    paid: payouts.filter((p) => p.status === "completed").length,
+    pending: payouts.filter((p) => p.status === "pending").length,
+    failed: payouts.filter((p) => p.status === "failed").length,
+    outstanding: payouts
+      .filter((p) => p.status === "pending")
+      .reduce((sum, p) => sum + p.amount, 0),
+  };
+}
+
+/**
+ * A run is over only when EVERY member's payout has settled. A failed payout
+ * keeps the run open on purpose — somebody still has to deal with it, and a
+ * distribution that quietly closed over a member who never got paid is the one
+ * outcome this whole screen exists to prevent.
+ */
+const isRunClosed = (payouts) =>
+  payouts.length > 0 && payouts.every((p) => p.status === "completed");
+
+/**
+ * How a run paid, read off the transactions rather than the approval: the
+ * approval records an intention, the transactions record what actually
+ * happened once the hold had its say.
+ */
+const methodOf = (payouts) =>
+  payouts.some((p) => p.viaMobileMoney) ? "mobile-money" : "manual";
+
+/** When the last member was settled. Falls back to the last row written. */
+const settledAtOf = (payouts) =>
+  payouts
+    .map((p) => p.confirmedAt)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b) - new Date(a))[0] ||
+  payouts[payouts.length - 1]?.date ||
+  null;
 
 /**
  * GET /api/shareout/:groupId  (auth)
@@ -86,8 +147,16 @@ router.get(
 
 /**
  * GET /api/shareout/:groupId/payouts  (auth, member)
- * The state of the group's most recent distribution, member by member: who has
+ * The distribution the group is CURRENTLY paying out, member by member: who has
  * been paid, who is still owed, and who is waiting on a provider.
+ *
+ * Only a run still in flight is returned. The moment the last member is
+ * settled the distribution is finished business — it stops being the thing the
+ * share-out screen is about and becomes a record, served by /history, so the
+ * screen is clear for the next cycle instead of permanently showing a
+ * "2 of 2 paid" the group has already been through. `lastCompleted` is the
+ * receipt of that: enough to say a share-out happened and point at the report,
+ * and not enough to be mistaken for a live one.
  *
  * Every member sees this, not just admins. A share-out where only the treasurer
  * can see who has been paid is the exact ledger a VSLA meets in person to
@@ -113,15 +182,16 @@ router.get(
       .lean();
 
     const mobileMoneyHold = isMobileMoneyOnHold();
+    const clear = {
+      shareOutId: null,
+      payouts: [],
+      totals: null,
+      method: null,
+      lastCompleted: null,
+      mobileMoneyHold,
+    };
 
-    if (!latest)
-      return res.json({
-        shareOutId: null,
-        payouts: [],
-        totals: null,
-        method: null,
-        mobileMoneyHold,
-      });
+    if (!latest) return res.json(clear);
 
     const rows = await Transaction.find({
       groupId: req.group._id,
@@ -131,49 +201,104 @@ router.get(
       .sort({ createdAt: 1 })
       .lean();
 
-    const payouts = rows.map((t) => {
-      const owed = Math.abs(t.amount);
-      const handed = t.depositAmount ?? owed;
-      return {
-        transactionId: String(t._id),
-        memberId: t.memberId ? String(t.memberId) : null,
-        memberName: t.memberName,
-        owed,
-        amount: handed, // what they actually get, after their own loan is netted
-        appliedToLoan: Math.max(0, owed - handed),
-        status: t.status,
-        paymentMethod: t.paymentMethod || null,
-        // Waiting on a person to pay and say so, vs waiting on pawaPay. That
-        // difference is the point of this screen: only the first has a button.
-        awaitsConfirmation: awaitsConfirmation(t),
-        viaMobileMoney: !!t.pawapay?.transfers?.length,
-        confirmedByName: t.meta?.cashConfirmedByName || null,
-        confirmedAt: t.meta?.cashConfirmedAt || null,
-        receiptId: t.receiptId,
-        date: t.createdAt,
-      };
-    });
+    const payouts = rows.map(toPayoutRow);
 
-    const totals = {
-      count: payouts.length,
-      paid: payouts.filter((p) => p.status === "completed").length,
-      pending: payouts.filter((p) => p.status === "pending").length,
-      failed: payouts.filter((p) => p.status === "failed").length,
-      outstanding: payouts
-        .filter((p) => p.status === "pending")
-        .reduce((sum, p) => sum + p.amount, 0),
-    };
+    // Done and dusted. Hand back the clear screen plus a one-line receipt, so
+    // the group can see that a share-out happened and go and read it, without
+    // the finished distribution sitting where the next one belongs.
+    if (isRunClosed(payouts))
+      return res.json({
+        ...clear,
+        lastCompleted: {
+          shareOutId: String(latest.meta.shareOutId),
+          completedAt: settledAtOf(payouts),
+          memberCount: payouts.length,
+          totalPaid: payouts.reduce((sum, p) => sum + p.amount, 0),
+          method: methodOf(payouts),
+        },
+      });
 
     res.json({
       shareOutId: String(latest.meta.shareOutId),
       payouts,
-      totals,
-      // How THIS run paid, read off the transactions rather than the approval:
-      // the approval records an intention, the transactions record what
-      // actually happened when the hold had its say.
-      method: payouts.some((p) => p.viaMobileMoney) ? "mobile-money" : "manual",
+      totals: totalsFor(payouts),
+      method: methodOf(payouts),
+      lastCompleted: null,
       mobileMoneyHold,
     });
+  })
+);
+
+/**
+ * GET /api/shareout/:groupId/history  (auth, member)  ?limit=12
+ * Every distribution this group has run, newest first, each with its full
+ * member-by-member detail.
+ *
+ * This is where a finished share-out goes to live. The share-out screen only
+ * ever shows the run in progress, so without somewhere permanent to read it,
+ * closing a cycle would erase the record of what it paid — and "what did we
+ * each get last year" is a question a savings group asks constantly.
+ *
+ * Every member sees the whole thing, for the same reason they see a live run:
+ * the ledger is the group's, not the treasurer's.
+ */
+router.get(
+  "/:groupId/history",
+  requireAuth,
+  requireGroupMember("groupId"),
+  asyncHandler(async (req, res) => {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 12, 1), 50);
+
+    // Group in the database and take only the newest runs, so a group with ten
+    // years of cycles still reads ten rows rather than every payout it ever made.
+    const runIds = await Transaction.aggregate([
+      {
+        $match: {
+          groupId: req.group._id,
+          type: "share-out",
+          "meta.shareOutId": { $exists: true },
+        },
+      },
+      { $group: { _id: "$meta.shareOutId", startedAt: { $min: "$createdAt" } } },
+      { $sort: { startedAt: -1 } },
+      { $limit: limit },
+    ]);
+    if (!runIds.length) return res.json({ runs: [] });
+
+    const rows = await Transaction.find({
+      groupId: req.group._id,
+      type: "share-out",
+      "meta.shareOutId": { $in: runIds.map((r) => r._id) },
+    })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const byRun = new Map(runIds.map((r) => [String(r._id), []]));
+    for (const t of rows) byRun.get(String(t.meta.shareOutId))?.push(toPayoutRow(t));
+
+    const runs = runIds.map((r) => {
+      const payouts = byRun.get(String(r._id)) ?? [];
+      const closed = isRunClosed(payouts);
+      return {
+        shareOutId: String(r._id),
+        startedAt: r.startedAt,
+        // Null while a run is still being paid — the one on the share-out
+        // screen appears here too, marked open, rather than going missing.
+        completedAt: closed ? settledAtOf(payouts) : null,
+        closed,
+        method: methodOf(payouts),
+        memberCount: payouts.length,
+        totalOwed: payouts.reduce((sum, p) => sum + p.owed, 0),
+        totalPaid: payouts
+          .filter((p) => p.status === "completed")
+          .reduce((sum, p) => sum + p.amount, 0),
+        totalAppliedToLoans: payouts.reduce((sum, p) => sum + p.appliedToLoan, 0),
+        totals: totalsFor(payouts),
+        payouts,
+      };
+    });
+
+    res.json({ runs });
   })
 );
 
@@ -219,6 +344,19 @@ router.post(
     });
     if (existing)
       return res.status(400).json({ error: "Share-out already pending" });
+
+    // An empty pot has nothing to hand out. This matters most right after a
+    // share-out closes: every member's savings are zero, so a second proposal
+    // computes every share to zero, writes no payout at all, and spends a
+    // unanimous admin vote on nothing while looking like it worked.
+    const pot = group.members
+      .filter((m) => m.status === "active")
+      .reduce((sum, m) => sum + (m.savings || 0), 0);
+    if (pot <= 0)
+      return res.status(400).json({
+        error:
+          "There is nothing to share out yet. Members need to contribute to this cycle first.",
+      });
 
     const penaltyIncome = await getPenaltyIncome(group._id);
 

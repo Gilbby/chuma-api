@@ -35,18 +35,48 @@ import {
  * Every transaction from one run shares a meta.shareOutId so the payouts screen
  * can show that distribution as a single list of who has been paid.
  */
-export async function distributeShareOut(group, { method } = {}) {
-  const [penaltyRow] = await Penalty.aggregate([
+export async function getCycleStart(groupId) {
+  const last = await Transaction.findOne({
+    groupId,
+    type: "share-out",
+    status: "completed",
+  })
+    .sort({ createdAt: -1 })
+    .select("createdAt")
+    .lean();
+  return last?.createdAt ?? null;
+}
+
+/**
+ * Paid group-pool penalties banked in the CURRENT cycle — everything since the
+ * last distribution.
+ *
+ * Scoping matters because penalty income is profit, and a cycle's profit is
+ * paid out when it closes. Summing every penalty the group ever collected would
+ * hand out the same money again next cycle: a group that had just distributed
+ * everything would still show a pot the size of its lifetime fines, with every
+ * member's share computing to zero.
+ */
+export async function getPenaltyIncome(groupId) {
+  const since = await getCycleStart(groupId);
+  const [row] = await Penalty.aggregate([
     {
       $match: {
-        groupId: group._id,
+        groupId,
         status: "paid",
         fundsDestination: "group-pool",
+        // Penalty has no paidAt; updatedAt is when it was last marked, which
+        // for a paid penalty is when it was paid.
+        ...(since ? { updatedAt: { $gt: since } } : {}),
       },
     },
     { $group: { _id: null, total: { $sum: "$amount" } } },
   ]);
-  const penaltyIncome = penaltyRow?.total || 0;
+  return row?.total || 0;
+}
+
+export async function distributeShareOut(group, { method } = {}) {
+  const penaltyIncome = await getPenaltyIncome(group._id);
 
   const cycleMonths = group.constitution?.loanRepaymentMonths || 12;
   const profit = estimateGroupProfit(
