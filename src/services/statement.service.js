@@ -37,6 +37,102 @@ export function savingsDelta(txn) {
   }
 }
 
+/** What each leg of a payment is called on the statement. */
+const PURPOSE_LABELS = {
+  contribution: "Savings contributions",
+  topup: "Savings top-ups",
+  repayment: "Loan repayments",
+  penalty: "Penalties",
+  fee: "Group fees",
+  loan: "Loan disbursed to you",
+  "savings-returned": "Your savings returned",
+  "profit-share": "Profit share",
+  withdrawal: "Withdrawal",
+  other: "Other",
+};
+
+/** Display order within each side of the breakdown. */
+const PURPOSE_ORDER = [
+  "contribution",
+  "topup",
+  "repayment",
+  "penalty",
+  "fee",
+  "loan",
+  "savings-returned",
+  "profit-share",
+  "withdrawal",
+  "other",
+];
+
+const TOLERANCE = 0.005; // sub-ngwee drift is rounding, not a missing leg
+
+/**
+ * What one settled transaction actually paid FOR, split into its legs.
+ *
+ * A statement that says "money out K15,000" is a number, not an account: the
+ * member paid one lump and cannot see that K14,860 of it became savings and
+ * K140 cleared a penalty. Two types are lumps and get taken apart here —
+ * everything else is already one purpose.
+ *
+ * Every leg is a positive magnitude, and the legs of a transaction always sum
+ * to |amount|. That invariant is the whole point: the itemisation has to add up
+ * to the total printed under it, or it is worse than no itemisation at all. Any
+ * transaction whose meta disagrees with what was charged falls back to a single
+ * "other" leg rather than printing legs that do not reconcile.
+ */
+export function purposeLegs(txn) {
+  const m = txn.meta || {};
+  const abs = Math.abs(Number(txn.amount) || 0);
+  if (abs <= 0) return [];
+
+  switch (txn.type) {
+    case "contribution":
+      return [
+        {
+          key: txn.contributionType === "topup" ? "topup" : "contribution",
+          amount: abs,
+        },
+      ];
+
+    case "combined": {
+      // One deposit settling several obligations. meta carries the savings and
+      // loan legs outright; penalties are the remainder, because only their ids
+      // are stored — payment.routes.js builds the charge as
+      // contribution + topup + repayments + penalties.
+      const savings = (Number(m.contribution) || 0) + (Number(m.topup) || 0);
+      const repay = (m.repayments || []).reduce(
+        (sum, r) => sum + (Number(r?.amount) || 0),
+        0
+      );
+      const penalties = abs - savings - repay;
+      if (savings < 0 || repay < 0 || penalties < -TOLERANCE)
+        return [{ key: "other", amount: abs }];
+
+      const legs = [];
+      if (savings > 0) legs.push({ key: "contribution", amount: savings });
+      if (repay > 0) legs.push({ key: "repayment", amount: repay });
+      if (penalties > TOLERANCE) legs.push({ key: "penalty", amount: penalties });
+      return legs.length ? legs : [{ key: "other", amount: abs }];
+    }
+
+    case "share-out": {
+      // The payout is the member's own stake back, plus what the cycle earned
+      // on it. Only the stake was ever in their savings balance, which is why
+      // the two lines differ from each other and from the savings ledger.
+      const stake = Math.min(Math.max(0, Number(m.memberSavings) || 0), abs);
+      const profit = abs - stake;
+      const legs = [];
+      if (stake > 0) legs.push({ key: "savings-returned", amount: stake });
+      if (profit > TOLERANCE) legs.push({ key: "profit-share", amount: profit });
+      return legs.length ? legs : [{ key: "savings-returned", amount: abs }];
+    }
+
+    default:
+      return [{ key: txn.type, amount: abs }];
+  }
+}
+
 function describe(txn) {
   switch (txn.type) {
     case "contribution":
@@ -100,6 +196,7 @@ export async function buildStatement({ user, groupId, from, to }) {
   const lines = [];
   const activity = [];
   const totals = { moneyIn: 0, moneyOut: 0, net: 0, pending: 0, byType: {} };
+  const byPurpose = { in: {}, out: {} };
 
   for (const t of txns) {
     const id = String(t._id);
@@ -147,9 +244,47 @@ export async function buildStatement({ user, groupId, from, to }) {
       const bucket = (totals.byType[t.type] ??= { count: 0, in: 0, out: 0 });
       bucket.count += 1;
       bucket[direction] += abs;
+
+      for (const leg of purposeLegs(t)) {
+        const side = byPurpose[direction];
+        const row = (side[leg.key] ??= {
+          key: leg.key,
+          label: PURPOSE_LABELS[leg.key] ?? leg.key,
+          amount: 0,
+          count: 0,
+        });
+        row.amount += leg.amount;
+        row.count += 1;
+      }
     }
   }
   totals.net = totals.moneyIn - totals.moneyOut;
+
+  // Round for display, then make the rows tie to the total they sit under. Any
+  // residue left by rounding becomes an explicit "Other" line rather than a
+  // column that silently fails to add up.
+  const side = (map, total) => {
+    const rows = Object.values(map)
+      .map((r) => ({ ...r, amount: Math.round(r.amount * 100) / 100 }))
+      .filter((r) => r.amount > 0)
+      .sort(
+        (a, b) => PURPOSE_ORDER.indexOf(a.key) - PURPOSE_ORDER.indexOf(b.key)
+      );
+    const summed = rows.reduce((sum, r) => sum + r.amount, 0);
+    const residue = Math.round((total - summed) * 100) / 100;
+    if (Math.abs(residue) >= 0.01)
+      rows.push({
+        key: "other",
+        label: PURPOSE_LABELS.other,
+        amount: residue,
+        count: 0,
+      });
+    return rows;
+  };
+  const breakdown = {
+    in: side(byPurpose.in, totals.moneyIn),
+    out: side(byPurpose.out, totals.moneyOut),
+  };
 
   let group = null;
   if (groupId) {
@@ -171,9 +306,10 @@ export async function buildStatement({ user, groupId, from, to }) {
     savingsIn,
     savingsOut,
     totals,
+    breakdown,
     lines,
     activity,
   };
 }
 
-export default { buildStatement, savingsDelta };
+export default { buildStatement, savingsDelta, purposeLegs };
