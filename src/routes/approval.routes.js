@@ -9,6 +9,7 @@ import { asyncHandler } from "../middleware/error.js";
 import { requireAuth } from "../middleware/auth.js";
 import { isGroupAdmin, ADMIN_ROLES } from "../middleware/groupAuth.js";
 import { generateReceiptId } from "../utils/helpers.js";
+import { isMobileMoneyOnHold } from "../utils/paymentHold.js";
 import {
   initiatePayout,
   providerFromPhone,
@@ -25,14 +26,32 @@ import {
 
 const router = express.Router();
 
+// Everything that is no longer waiting on a vote — the approval history.
+const RESOLVED_STATUSES = ["approved", "rejected", "executed"];
+
 /**
- * GET /api/approvals?groupId=...  (auth) — pending approvals, scoped to
- * groups the caller belongs to (never a global listing).
+ * GET /api/approvals?groupId=...&status=...&limit=...  (auth) — approvals
+ * scoped to groups the caller belongs to (never a global listing).
+ *
+ * status: "pending" (default), "resolved" (the history: approved, rejected,
+ * executed), "all", or one exact status. Pending stays the default because
+ * most callers only want the work queue — history is opt-in.
  */
 router.get(
   "/",
   requireAuth,
   asyncHandler(async (req, res) => {
+    const wanted = String(req.query.status || "pending");
+    let status;
+    if (wanted === "all") status = null;
+    else if (wanted === "resolved") status = { $in: RESOLVED_STATUSES };
+    else if (["pending", ...RESOLVED_STATUSES].includes(wanted)) status = wanted;
+    else return res.status(400).json({ error: "Unknown status filter" });
+
+    // History grows without bound — cap it so a long-lived group still fits in
+    // one reasonable response.
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 200);
+
     const myGroups = await Group.find({
       members: { $elemMatch: { userId: req.userId, status: "active" } },
     })
@@ -40,14 +59,17 @@ router.get(
       .lean();
     const myGroupIds = myGroups.map((g) => g._id);
 
-    const filter = { status: "pending", groupId: { $in: myGroupIds } };
+    const filter = { groupId: { $in: myGroupIds } };
+    if (status) filter.status = status;
     if (req.query.groupId) {
-      const requested = String(req.query.groupId);
-      if (!myGroupIds.some((id) => String(id) === requested))
+      const requestedGroup = String(req.query.groupId);
+      if (!myGroupIds.some((id) => String(id) === requestedGroup))
         return res.status(403).json({ error: "Not a member of this group" });
-      filter.groupId = requested;
+      filter.groupId = requestedGroup;
     }
-    const approvals = await Approval.find(filter).sort({ createdAt: -1 });
+    const approvals = await Approval.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit);
     res.json({ approvals });
   })
 );
@@ -255,6 +277,64 @@ async function executeApproval(approval, req) {
       (m) => String(m.userId) === String(loan.memberId)
     );
     const phone = member?.phone;
+
+    // ── Mobile money on hold: disburse as CASH ──────────────────────────────
+    // The treasurer hands the borrower the notes. Nothing is netted out — there
+    // is no pawaPay fee on cash, and we cannot take our 1% out of a cash box —
+    // so the borrower receives the full principal and repays what the loan
+    // already says. The wallet guard still applies: a group cannot hand out
+    // money it does not hold.
+    if (isMobileMoneyOnHold()) {
+      const wallet = group?.walletBalance || 0;
+      if (loan.principal > wallet) {
+        const txn = await Transaction.create({
+          groupId: loan.groupId,
+          groupName: loan.groupName,
+          memberId: loan.memberId,
+          memberName: loan.memberName,
+          type: "loan",
+          amount: loan.principal,
+          status: "failed",
+          note: "Loan disbursement blocked — insufficient group wallet",
+          receiptId: generateReceiptId("CHM"),
+          paymentMethod: "Cash",
+          meta: { loanId: loan._id },
+        });
+        await handleFailedTransaction(txn);
+        return {
+          type: "loan-disbursement-blocked",
+          reason: "insufficient-group-wallet",
+          loanId: loan._id,
+        };
+      }
+
+      const txn = await Transaction.create({
+        groupId: loan.groupId,
+        groupName: loan.groupName,
+        memberId: loan.memberId,
+        memberName: loan.memberName,
+        type: "loan",
+        amount: loan.principal, // full principal — drives circulation and repayment
+        depositAmount: loan.principal, // handed over in full: no fees on cash
+        platformFee: 0, // nothing to take out of notes we never touch
+        paymentMethod: "Cash",
+        status: "completed",
+        note: "Loan disbursed in cash",
+        receiptId: generateReceiptId("CHM"),
+        meta: { loanId: loan._id, cashDisbursement: true },
+      });
+      // Activates the loan, moves the principal into circulation and tells the
+      // borrower to collect from the treasurer — the same settlement path a
+      // completed payout takes.
+      await settleCompletedTransaction(txn);
+
+      return {
+        type: "loan-disbursed-cash",
+        loanId: loan._id,
+        amount: loan.principal,
+        transactionId: txn._id,
+      };
+    }
 
     // Price the disbursement FIRST (pure, no side effects). The borrower bears
     // the fees: pawaPay % + e-levy + our 1% are netted OUT of the principal, so

@@ -7,6 +7,7 @@ import { requireAuth, requireRealName } from "../middleware/auth.js";
 import { requireGroupMember } from "../middleware/groupAuth.js";
 import { paymentLimiter } from "../middleware/rateLimits.js";
 import { generateReceiptId } from "../utils/helpers.js";
+import { rejectIfMobileMoneyHeld } from "../utils/paymentHold.js";
 import { isGroupLocked } from "../services/logic.service.js";
 import {
   initiateDeposit,
@@ -147,6 +148,10 @@ router.post(
     const phone = payerPhone || req.user.phone;
     const isCash = paymentMethod === "Cash";
 
+    // Mobile money is on hold for member money — the whole checkout is cash.
+    const held = rejectIfMobileMoneyHeld(paymentMethod);
+    if (held) return res.status(held.status).json(held.body);
+
     // PRICE the whole total ONCE: `base` (grandBase) is what gets pooled/applied
     // and survives fees; `depositAmount` is what PawaPay collects. Same pure
     // function, config and gross-up the contribution flow uses.
@@ -157,14 +162,25 @@ router.post(
       mnoFee: config.pricing.collectionFeeFor(providerFromPhone(phone)),
       wholeKwachaOnly: config.pricing.contributionWholeKwacha,
     });
-    const breakdown = {
-      base: pricing.base,
-      platformFee: pricing.platformFee,
-      depositAmount: pricing.depositAmount,
-      feesCovered: pricing.feesCovered,
-      // Member's OWN network charge to their wallet (display-only, not collected).
-      networkFee: config.pricing.customerFeeFor(providerFromPhone(phone))(grandBase),
-    };
+    // Cash is collected at face value: nothing to gross up, and no platform fee
+    // we could take out of notes in a treasurer's hand — booking one would
+    // record revenue nobody ever received.
+    const breakdown = isCash
+      ? {
+          base: grandBase,
+          platformFee: 0,
+          depositAmount: grandBase,
+          feesCovered: 0,
+          networkFee: 0,
+        }
+      : {
+          base: pricing.base,
+          platformFee: pricing.platformFee,
+          depositAmount: pricing.depositAmount,
+          feesCovered: pricing.feesCovered,
+          // Member's OWN network charge to their wallet (display-only, not collected).
+          networkFee: config.pricing.customerFeeFor(providerFromPhone(phone))(grandBase),
+        };
 
     const parts = [];
     if (contribution > 0) parts.push("savings");
@@ -189,9 +205,9 @@ router.post(
       memberName: req.user.name,
       type: "combined",
       amount: -grandBase, // BASE (pooled/applied) — money out of the member
-      depositAmount: pricing.depositAmount, // grossed-up total actually charged
-      platformFee: pricing.platformFee, // platform revenue on this txn (never pooled)
-      networkFee: isCash ? 0 : breakdown.networkFee, // member's own MMO fee (display-only)
+      depositAmount: breakdown.depositAmount, // grossed-up total charged (face value for cash)
+      platformFee: breakdown.platformFee, // platform revenue on this txn (never pooled)
+      networkFee: breakdown.networkFee, // member's own MMO fee (display-only)
       paymentMethod,
       status: "pending",
       note: `Combined payment: ${parts.join(", ")}`,

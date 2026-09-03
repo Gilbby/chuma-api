@@ -78,7 +78,14 @@ app.get("/", (req, res) =>
     smsEnabled: config.africasTalking.smsEnabled,
   })
 );
-app.get("/api/health", (req, res) => res.json({ status: "ok", time: new Date() }));
+app.get("/api/health", (req, res) =>
+  res.json({
+    status: "ok",
+    time: new Date(),
+    // Ops visibility: is member money still cash-only? (see utils/paymentHold.js)
+    mobileMoneyHold: config.payments.mobileMoneyHold,
+  })
+);
 
 // Routes
 app.use("/api/auth", authRoutes);

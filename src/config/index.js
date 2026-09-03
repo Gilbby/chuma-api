@@ -216,6 +216,19 @@ export const config = {
     ),
   },
 
+  // ── Mobile money hold ──────────────────────────────────────────────────
+  // pawaPay is on hold for MEMBER money while loan disbursement is not live:
+  // savings, loan repayments, loan disbursement, penalties, share-outs and
+  // exit refunds all move as CASH, confirmed by an admin.
+  //
+  // Platform fees stay on pawaPay — group creation and the monthly group fee
+  // are the app being paid, not members paying each other, and they never
+  // needed a payout to work. Set MOBILE_MONEY_HOLD=false to lift the hold; no
+  // other change is needed.
+  payments: {
+    mobileMoneyHold: bool(process.env.MOBILE_MONEY_HOLD, true),
+  },
+
   kyc: {
     baseUrl: process.env.KYC_PROVIDER_BASE_URL || "",
     apiKey: process.env.KYC_PROVIDER_API_KEY || "",

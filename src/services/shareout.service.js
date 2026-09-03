@@ -9,6 +9,7 @@ import {
 } from "./logic.service.js";
 import { initiatePayout, providerFromPhone } from "./pawapay.service.js";
 import { pricePayout } from "./pricing.service.js";
+import { isMobileMoneyOnHold } from "../utils/paymentHold.js";
 import { config } from "../config/index.js";
 import {
   settleCompletedTransaction,
@@ -147,6 +148,38 @@ export async function distributeShareOut(group) {
       });
       await settleCompletedTransaction(txn);
       payouts.push({ member: m.name, owed: calc.share, sent: 0, appliedToLoan: calc.share });
+      continue;
+    }
+
+    // Mobile money on hold: the group pays each member their share in cash.
+    // Nothing is deducted — there is no payout to be charged for, and no
+    // platform fee we could take out of notes — so the member receives the
+    // whole net share and the cycle closes as the record is written.
+    if (isMobileMoneyOnHold()) {
+      const txn = await Transaction.create({
+        groupId: group._id,
+        groupName: group.name,
+        memberId: m.userId,
+        memberName: m.name,
+        type: "share-out",
+        amount: calc.share, // full owed — what settlement decrements from the pool
+        depositAmount: netCash, // what the member is handed
+        platformFee: 0,
+        paymentMethod: "Cash",
+        status: "completed",
+        note: "Cycle share-out (cash)",
+        receiptId: generateReceiptId("CHM"),
+        meta: { memberSavings: m.savings },
+      });
+      await settleCompletedTransaction(txn);
+      payouts.push({
+        member: m.name,
+        owed: calc.share,
+        appliedToLoan: calc.share - netCash,
+        sent: netCash,
+        fees: 0,
+        method: "cash",
+      });
       continue;
     }
 

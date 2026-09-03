@@ -20,11 +20,24 @@ import { Notification } from "../models/Notification.js";
 import { Transaction } from "../models/Transaction.js";
 import { settleCompletedTransaction } from "./settlement.service.js";
 
-/** Cash payments that need acknowledging: a plain contribution, or the unified
- *  checkout (savings + repayments + penalties paid as one lump). */
-export const CASH_CONFIRMABLE_TYPES = ["contribution", "combined"];
+/** Cash payments that need acknowledging: a plain contribution, the unified
+ *  checkout (savings + repayments + penalties paid as one lump), or a single
+ *  loan repayment / penalty paid straight from its own screen. */
+export const CASH_CONFIRMABLE_TYPES = [
+  "contribution",
+  "combined",
+  "repayment",
+  "penalty",
+];
 
-const labelFor = (txn) => (txn.type === "combined" ? "payment" : "contribution");
+const LABELS = {
+  contribution: "contribution",
+  combined: "payment",
+  repayment: "loan repayment",
+  penalty: "penalty payment",
+};
+
+const labelFor = (txn) => LABELS[txn.type] || "payment";
 
 /**
  * Raise the receipt for a pending cash transaction: one approval for the group's

@@ -3,6 +3,7 @@ import { Loan } from "../models/Loan.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import { initiatePayout, providerFromPhone } from "./pawapay.service.js";
 import { pricePayout } from "./pricing.service.js";
+import { isMobileMoneyOnHold } from "../utils/paymentHold.js";
 import { config } from "../config/index.js";
 import {
   settleCompletedTransaction,
@@ -108,6 +109,38 @@ export async function refundAndRemoveMember(group, member, { approvalId } = {}) 
     });
     await settleCompletedTransaction(txn);
     return { refunded: 0, appliedToLoan, savings, netted, removed: true };
+  }
+
+  // Mobile money on hold: the treasurer hands the leaving member their stake
+  // in cash. No fees come off it, and the row retires as the record is written
+  // — there is no payout that could fail after the fact.
+  if (isMobileMoneyOnHold()) {
+    const txn = await Transaction.create({
+      groupId: group._id,
+      groupName: group.name,
+      memberId: member.userId,
+      memberName: member.name,
+      type: "withdrawal",
+      amount: savings, // full stake — what settlement removes from the pool
+      depositAmount: cash, // what the member is handed
+      platformFee: 0,
+      paymentMethod: "Cash",
+      status: "completed",
+      note: "Refund on removal from group (cash)",
+      receiptId: generateReceiptId("CHM"),
+      meta,
+    });
+    await settleCompletedTransaction(txn);
+    return {
+      refunded: cash,
+      fees: 0,
+      appliedToLoan,
+      savings,
+      netted,
+      removed: true,
+      method: "cash",
+      transactionId: txn._id,
+    };
   }
 
   // Fees come out of what they receive, exactly as at share-out. pricePayout

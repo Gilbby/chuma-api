@@ -27,6 +27,8 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { settleCompletedTransaction } from "../services/settlement.service.js";
+import { raiseCashReceipt } from "../services/cashReceipt.service.js";
+import { rejectIfMobileMoneyHeld } from "../utils/paymentHold.js";
 import { pricePayout } from "../services/pricing.service.js";
 import { config } from "../config/index.js";
 
@@ -235,8 +237,9 @@ router.post(
 
 /**
  * POST /api/loans/:id/repay  (auth) — full or partial repayment.
- * Collects from member via PawaPay deposit.
- * Body: { amount, payerPhone? }
+ * Collects from the member by PawaPay deposit, or records a cash repayment for
+ * an admin to confirm (the only route while the mobile money hold is on).
+ * Body: { amount, paymentMethod?, payerPhone? }
  */
 router.post(
   "/:id/repay",
@@ -244,10 +247,15 @@ router.post(
   requireRealName,
   paymentLimiter,
   asyncHandler(async (req, res) => {
-    const { payerPhone } = req.body;
+    const { payerPhone, paymentMethod } = req.body;
     const amount = Number(req.body.amount);
     if (!Number.isFinite(amount) || amount <= 0)
       return res.status(400).json({ error: "Enter a valid amount" });
+
+    const isCash = paymentMethod === "Cash";
+    // Mobile money is on hold for member money — repayments come in as cash.
+    const held = rejectIfMobileMoneyHeld(paymentMethod);
+    if (held) return res.status(held.status).json(held.body);
 
     const loan = await Loan.findById(req.params.id);
     if (!loan) return res.status(404).json({ error: "Loan not found" });
@@ -275,12 +283,33 @@ router.post(
       memberName: req.user.name,
       type: "repayment",
       amount: -payAmount,
+      paymentMethod,
       status: "pending",
       note: "Loan repayment",
       receiptId: generateReceiptId("CHM"),
       meta: { loanId: loan._id },
     });
     await txn.validate(); // ValidationError → 400 via the error middleware
+
+    // Cash: nothing is applied to the loan until an admin says the money
+    // reached them. Same receipt flow as a cash contribution, so the group's
+    // record shows who confirmed it — see cashReceipt.service.js.
+    if (isCash) {
+      const group = await Group.findById(loan.groupId).lean();
+      if (!group) return res.status(404).json({ error: "Group not found" });
+      await txn.save();
+      const approval = await raiseCashReceipt({
+        group,
+        txn,
+        payerName: req.user.name,
+      });
+      return res.json({
+        loan,
+        transaction: txn,
+        approval,
+        message: "Recorded — awaiting an admin's confirmation of the cash",
+      });
+    }
 
     const deposit = await initiateDeposit({
       amount: payAmount,

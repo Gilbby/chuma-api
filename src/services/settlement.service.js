@@ -307,11 +307,16 @@ export async function settleCompletedTransaction(txn) {
       if (loan.memberId) {
         const net = txn.depositAmount ?? loan.principal;
         const fees = Math.max(0, loan.principal - net);
+        // A cash loan is handed over by the treasurer, not sent anywhere — and
+        // it carries no fees, so the borrower gets the whole principal.
+        const inCash = txn.paymentMethod === "Cash";
         await Notification.create({
           userId: loan.memberId,
           type: "loan",
           title: "Loan disbursed",
-          body: `Your K${loan.principal} loan was sent to your mobile wallet as K${net}${fees > 0 ? ` (K${fees.toFixed(2)} in fees)` : ""}. You repay K${loan.outstanding}.`,
+          body: inCash
+            ? `Your K${loan.principal} loan was approved — collect the cash from your treasurer. You repay K${loan.outstanding}.`
+            : `Your K${loan.principal} loan was sent to your mobile wallet as K${net}${fees > 0 ? ` (K${fees.toFixed(2)} in fees)` : ""}. You repay K${loan.outstanding}.`,
           groupId: loan.groupId,
           groupName: loan.groupName,
         });
@@ -450,7 +455,13 @@ export async function settleCompletedTransaction(txn) {
           userId: txn.memberId,
           type: "governance",
           title: "Removed from group",
-          body: `You were removed from ${txn.groupName}. Your K${snapshot} savings were refunded${toLoan > 0 ? ` after K${toLoan} cleared your outstanding loan` : ""}${sent > 0 ? ` — K${sent} sent to your mobile wallet` : ""}.`,
+          body: `You were removed from ${txn.groupName}. Your K${snapshot} savings were refunded${toLoan > 0 ? ` after K${toLoan} cleared your outstanding loan` : ""}${
+            sent > 0
+              ? txn.paymentMethod === "Cash"
+                ? ` — collect K${sent} in cash from your treasurer`
+                : ` — K${sent} sent to your mobile wallet`
+              : ""
+          }.`,
           groupId: txn.groupId,
           groupName: txn.groupName,
         });

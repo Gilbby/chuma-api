@@ -29,6 +29,11 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { issuePenalty } from "../services/penalty.service.js";
+import { raiseCashReceipt } from "../services/cashReceipt.service.js";
+import {
+  rejectIfMobileMoneyHeld,
+  isMobileMoneyOnHold,
+} from "../utils/paymentHold.js";
 import {
   settleCompletedTransaction,
   handleFailedTransaction,
@@ -261,6 +266,10 @@ router.post(
     }
 
     const phone = req.body.payerPhone || req.user.phone;
+    const isCash = req.body.paymentMethod === "Cash";
+    // Mobile money is on hold for member money — penalties are paid in cash.
+    const held = rejectIfMobileMoneyHeld(req.body.paymentMethod);
+    if (held) return res.status(held.status).json(held.body);
 
     // Validate the full transaction against the model BEFORE initiating the
     // deposit — PawaPay must never move money for a request we would reject.
@@ -271,12 +280,32 @@ router.post(
       memberName: req.user.name,
       type: "penalty",
       amount: -penalty.amount,
+      paymentMethod: req.body.paymentMethod,
       status: "pending",
       note: `Penalty: ${penalty.reason}`,
       receiptId: generateReceiptId("CHM"),
       meta: { penaltyId: penalty._id },
     });
     await txn.validate(); // ValidationError → 400 via the error middleware
+
+    // Cash: the penalty stays unpaid until an admin confirms the money reached
+    // them, exactly as a cash contribution does.
+    if (isCash) {
+      const group = await Group.findById(penalty.groupId).lean();
+      if (!group) return res.status(404).json({ error: "Group not found" });
+      await txn.save();
+      const approval = await raiseCashReceipt({
+        group,
+        txn,
+        payerName: req.user.name,
+      });
+      return res.json({
+        message: "Recorded — awaiting an admin's confirmation of the cash",
+        penalty,
+        transaction: txn,
+        approval,
+      });
+    }
 
     const deposit = await initiateDeposit({
       amount: penalty.amount,
@@ -358,6 +387,10 @@ router.post(
 
     const phone = req.body.payerPhone || req.user.phone;
     const first = penalties[0];
+    const isCash = req.body.paymentMethod === "Cash";
+    // Mobile money is on hold for member money — penalties are paid in cash.
+    const held = rejectIfMobileMoneyHeld(req.body.paymentMethod);
+    if (held) return res.status(held.status).json(held.body);
 
     // Validate the full transaction against the model BEFORE initiating the
     // deposit — PawaPay must never move money for a request we would reject.
@@ -368,6 +401,7 @@ router.post(
       memberName: req.user.name,
       type: "penalty",
       amount: -total,
+      paymentMethod: req.body.paymentMethod,
       status: "pending",
       note:
         penalties.length === 1
@@ -377,6 +411,24 @@ router.post(
       meta: { penaltyIds: penalties.map((p) => p._id) },
     });
     await txn.validate(); // ValidationError → 400 via the error middleware
+
+    // Cash: nothing is marked paid until an admin confirms the money reached
+    // them — one receipt for the whole batch, like the unified checkout.
+    if (isCash) {
+      const group = await Group.findById(first.groupId).lean();
+      if (!group) return res.status(404).json({ error: "Group not found" });
+      await txn.save();
+      const approval = await raiseCashReceipt({
+        group,
+        txn,
+        payerName: req.user.name,
+      });
+      return res.json({
+        message: "Recorded — awaiting an admin's confirmation of the cash",
+        transaction: txn,
+        approval,
+      });
+    }
 
     const deposit = await initiateDeposit({
       amount: total,
@@ -702,6 +754,30 @@ router.post(
       return res
         .status(400)
         .json({ error: 'kind must be "contribution" or "payout"' });
+
+    // Cash moves at face value: no deposit to gross up, no payout to charge
+    // for, and no platform fee we could take out of a treasurer's cash box. The
+    // preview has to say so, or every screen quotes fees nobody will pay.
+    if (isMobileMoneyOnHold())
+      return res.json(
+        kind === "contribution"
+          ? {
+              base: amount,
+              platformFee: 0,
+              depositAmount: amount,
+              feesCovered: 0,
+              networkFee: 0,
+              cashOnly: true,
+            }
+          : {
+              owed: amount,
+              platformFee: 0,
+              transactionFee: 0,
+              totalFees: 0,
+              netReceived: amount,
+              cashOnly: true,
+            }
+      );
 
     if (kind === "contribution") {
       // priceContribution does not throw on small amounts — no tooSmall case.
