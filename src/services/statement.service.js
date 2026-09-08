@@ -160,9 +160,68 @@ function describe(txn) {
 }
 
 /**
- * Build a statement for `memberId` over [from, to], optionally scoped to one
- * group. `to` is inclusive of the whole day the caller passed.
+ * The project-fund groups these transactions touch, keyed by id.
+ *
+ * Loaded once and shared: both the per-project totals and the name on every
+ * individual line need the same groups, and a statement should not fetch them
+ * twice. Pending transactions count — a gift awaiting confirmation still names
+ * the project it was meant for.
  */
+async function loadProjectFunds(txns) {
+  const groupIds = [
+    ...new Set(txns.map((t) => t.groupId).filter(Boolean).map(String)),
+  ];
+  if (groupIds.length === 0) return new Map();
+  return new Map(
+    (
+      await Group.find({ _id: { $in: groupIds } })
+        .select("name groupType projects")
+        .lean()
+    )
+      .filter(isProjectFundGroup)
+      .map((g) => [String(g._id), g])
+  );
+}
+
+/**
+ * What to call one movement on a giving statement: the project the money was
+ * paid to.
+ *
+ * "Payment" tells a church member nothing — they gave to a named thing and the
+ * statement has to name it back. Nearly every gift arrives here as a `combined`
+ * transaction, because the unified checkout books giving that way, so the type
+ * alone can never supply a useful name. Only the project can.
+ *
+ * A lump that ALSO cleared a penalty or a repayment says so. A line reading
+ * "Church building" against a payment that was half penalty is a lie, and the
+ * member would be right to dispute the figure beside it.
+ *
+ * Returns null for a savings group and for anything that is not giving — a fee
+ * or a penalty paid on its own keeps the wording the API already gives it.
+ */
+function projectLabelFor(funds, txn) {
+  const group = funds.get(String(txn.groupId));
+  if (!group) return null;
+  if (txn.type !== "contribution" && txn.type !== "combined") return null;
+
+  const m = txn.meta || {};
+  const gave =
+    txn.type === "contribution"
+      ? Math.abs(Number(txn.amount) || 0)
+      : (Number(m.contribution) || 0) + (Number(m.topup) || 0);
+  if (gave <= 0) return null; // a combined payment that settled no giving
+
+  const project = m.projectId
+    ? (group.projects || []).find((p) => String(p._id) === String(m.projectId))
+    : null;
+  // Giving that names no project is still giving — see buildProjectGiving.
+  const name = project?.name ?? "General giving";
+
+  const alsoSettled =
+    (m.repayments || []).length > 0 || (m.penaltyIds || []).length > 0;
+  return alsoSettled ? name + " + other" : name;
+}
+
 /**
  * What a project fund's giving actually paid for, one row per project.
  *
@@ -181,25 +240,10 @@ function describe(txn) {
  * Savings groups produce no rows at all: their contributions buy a stake, not
  * a project.
  */
-async function buildProjectGiving(txns) {
+function buildProjectGiving(txns, funds) {
+  if (funds.size === 0) return [];
   const giving = txns.filter((t) => savingsDelta(t) > 0);
   if (giving.length === 0) return [];
-
-  const groupIds = [
-    ...new Set(giving.map((t) => t.groupId).filter(Boolean).map(String)),
-  ];
-  if (groupIds.length === 0) return [];
-
-  const funds = new Map(
-    (
-      await Group.find({ _id: { $in: groupIds } })
-        .select("name groupType projects")
-        .lean()
-    )
-      .filter(isProjectFundGroup)
-      .map((g) => [String(g._id), g])
-  );
-  if (funds.size === 0) return [];
 
   const rows = new Map();
   for (const t of giving) {
@@ -237,6 +281,10 @@ async function buildProjectGiving(txns) {
     .sort((a, b) => b.amount - a.amount);
 }
 
+/**
+ * Build a statement for `memberId` over [from, to], optionally scoped to one
+ * group. `to` is inclusive of the whole day the caller passed.
+ */
 export async function buildStatement({ user, groupId, from, to }) {
   const memberId = user._id;
   const scope = groupId ? { groupId } : {};
@@ -265,6 +313,10 @@ export async function buildStatement({ user, groupId, from, to }) {
     .limit(1000)
     .lean();
 
+  // Named before the loop: every ledger line and activity row carries the
+  // project it paid into, and buildProjectGiving reuses the same groups.
+  const funds = await loadProjectFunds(txns);
+
   let balance = openingBalance;
   let savingsIn = 0;
   let savingsOut = 0;
@@ -290,6 +342,7 @@ export async function buildStatement({ user, groupId, from, to }) {
         type: t.type,
         groupName: t.groupName ?? "",
         description: describe(t),
+        projectLabel: projectLabelFor(funds, t),
         note: t.note ?? "",
         delta,
         balance,
@@ -304,6 +357,7 @@ export async function buildStatement({ user, groupId, from, to }) {
       type: t.type,
       groupName: t.groupName ?? "",
       description: describe(t),
+      projectLabel: projectLabelFor(funds, t),
       note: t.note ?? "",
       amount: abs,
       direction,
@@ -363,7 +417,7 @@ export async function buildStatement({ user, groupId, from, to }) {
 
   // Per-project giving. Empty for a savings group, so the client can key the
   // whole section off whether there are rows.
-  const projects = await buildProjectGiving(txns);
+  const projects = buildProjectGiving(txns, funds);
 
   let group = null;
   if (groupId) {
