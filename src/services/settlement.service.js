@@ -28,7 +28,8 @@ import { notify, notifyAll } from "./notify.service.js";
  *   loan       → { loanId }            (disbursement payout)
  *   share-out  → { memberSavings }     (member's savings snapshot at share-out)
  *   withdrawal → { exit, memberRowId, memberSavings }  (refund on removal)
- *   combined   → { contribution, topup, repayments:[{loanId,amount}], penaltyIds:[] }
+ *   combined   → { contribution, topup, repayments:[{loanId,amount}], penaltyIds:[],
+ *                  projectId? }      (project-fund groups: what the savings were given for)
  */
 
 // ─── Reusable effect helpers ─────────────────────────────────────────────────
@@ -54,6 +55,21 @@ async function creditMemberSavings({ groupId, memberId, amount }) {
         walletBalance: amount,
       },
     }
+  );
+}
+
+/**
+ * Roll a settled contribution up into the project it was given for. Same $inc
+ * reasoning as creditMemberSavings: several members can give toward the same
+ * project at once. A project deleted or archived between payment and settlement
+ * simply matches nothing — the money is still credited to the member and the
+ * group above, it just stops being attributed to a project that is gone.
+ */
+async function creditProject({ groupId, projectId, amount }) {
+  if (!(amount > 0) || !projectId) return;
+  await Group.updateOne(
+    { _id: groupId, "projects._id": projectId },
+    { $inc: { "projects.$.collected": amount } }
   );
 }
 
@@ -173,6 +189,12 @@ export async function settleCompletedTransaction(txn) {
         memberId: txn.memberId,
         amount: Math.abs(txn.amount),
       });
+      if (txn.meta?.projectId)
+        await creditProject({
+          groupId: txn.groupId,
+          projectId: txn.meta.projectId,
+          amount: Math.abs(txn.amount),
+        });
       // Runs inside this branch so it inherits the caller's exactly-once
       // pending→final guard (see bookCollectionPlatformFee).
       await bookCollectionPlatformFee(txn);
@@ -206,6 +228,14 @@ export async function settleCompletedTransaction(txn) {
         memberId: txn.memberId,
         amount: savings,
       });
+      // Project-fund groups (church) tag the savings leg with the project it
+      // was given for; roll it up so the project shows what it has raised.
+      if (m.projectId)
+        await creditProject({
+          groupId: txn.groupId,
+          projectId: m.projectId,
+          amount: savings,
+        });
       for (const r of m.repayments || []) {
         if (r?.loanId) await applyLoanRepayment({ loanId: r.loanId, amount: r.amount });
       }

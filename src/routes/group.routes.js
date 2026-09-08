@@ -28,6 +28,7 @@ import {
   getDefaults,
   getSavingsGrowth,
   getRequiredApprovals,
+  isProjectFundGroup,
 } from "../services/logic.service.js";
 import {
   initiateDeposit,
@@ -44,6 +45,30 @@ const router = express.Router();
 // absent: it is set when the group is created and changing it is a transfer of
 // control, not an invite.
 const INVITABLE_ROLES = ["Member", "Treasurer", "Secretary"];
+
+// A group cannot list an unbounded number of projects — each one is a picker
+// row on every contribution screen.
+const MAX_PROJECTS = 30;
+
+/**
+ * Normalise one client-supplied project into what the schema stores. Returns
+ * null when the name is missing/blank — the caller decides whether that is an
+ * error or a row to skip. `targetAmount` is optional: anything not a positive
+ * number becomes null, meaning "no goal set".
+ */
+function sanitizeProject(raw, userId) {
+  const name = typeof raw?.name === "string" ? raw.name.trim().slice(0, 80) : "";
+  if (!name) return null;
+  const target = Number(raw?.targetAmount);
+  return {
+    name,
+    targetAmount: Number.isFinite(target) && target > 0 ? target : null,
+    collected: 0,
+    status: "active",
+    createdBy: userId,
+    createdAt: new Date(),
+  };
+}
 
 /** Attach computed fee/lock status to a group object for responses. */
 function withFeeStatus(group) {
@@ -142,13 +167,84 @@ router.get(
 );
 
 /**
+ * POST /api/groups/:id/projects  (auth, Chairperson) — add a savings project.
+ * Body: { name, targetAmount? }
+ *
+ * Only the Chairperson may open a new project: it decides what members'
+ * money can be given toward, so it is a rule change, not day-to-day admin.
+ */
+router.post(
+  "/:id/projects",
+  requireAuth,
+  requireGroupAdmin("id"),
+  asyncHandler(async (req, res) => {
+    const group = req.group;
+
+    if (!isProjectFundGroup(group))
+      return res
+        .status(400)
+        .json({ error: "This group type does not use savings projects" });
+    if (req.member.role !== "Chairperson")
+      return res
+        .status(403)
+        .json({ error: "Only the Chairperson can add a project" });
+
+    const project = sanitizeProject(req.body, req.userId);
+    if (!project)
+      return res.status(400).json({ error: "Project name is required" });
+
+    if (group.projects.length >= MAX_PROJECTS)
+      return res
+        .status(400)
+        .json({ error: `A group can have at most ${MAX_PROJECTS} projects` });
+
+    // Names are how members pick a project on the payment screen, so two that
+    // read the same would be indistinguishable there.
+    const clash = group.projects.some(
+      (p) =>
+        p.status !== "archived" &&
+        p.name.trim().toLowerCase() === project.name.toLowerCase()
+    );
+    if (clash)
+      return res
+        .status(409)
+        .json({ error: "A project with that name already exists" });
+
+    group.projects.push(project);
+    await group.save();
+
+    const created = group.projects[group.projects.length - 1];
+
+    // Everyone who could give toward it needs to know it exists.
+    await notifyAll(
+      group.members
+        .filter((m) => m.status === "active" && String(m.userId) !== String(req.userId))
+        .map((m) => m.userId)
+        .filter(Boolean),
+      {
+        type: "governance",
+        title: "New project to give toward",
+        body: `${req.user.name} added "${created.name}" to ${group.name}.`,
+        groupId: group._id,
+        groupName: group.name,
+      }
+    );
+
+    res.status(201).json({ project: created });
+  })
+);
+
+/**
  * POST /api/groups  (auth) — create a group.
  * Charges month 1 of the monthly fee (K100) via PawaPay deposit from the
  * creator's wallet. Group goes live once payment is ACCEPTED.
  *
  * Body: { name, description, groupType, contributionAmount,
  *         contributionFrequency, shareOutDate, loanInterestRate,
- *         loanMaxMultiplier, constitution, payerPhone }
+ *         loanMaxMultiplier, constitution, projects, payerPhone }
+ *
+ * Project-fund types (church) ignore every cycle field above and require
+ * `projects: [{ name, targetAmount? }]` with at least one entry instead.
  */
 router.post(
   "/",
@@ -175,6 +271,45 @@ router.post(
     const payerPhone = body.payerPhone || req.user.phone;
     const fee = config.rules.groupMonthlyFee;
 
+    // A project-fund group (church) has no cycle at all: whatever the client
+    // sent for amount / frequency / share-out / penalties / lending is
+    // discarded here rather than trusted, so a hand-rolled request can't create
+    // a church group that quietly behaves like a savings group.
+    const groupType = body.groupType || "savings-group";
+    const projectFund = isProjectFundGroup(groupType);
+
+    let projects = [];
+    if (projectFund) {
+      const raw = Array.isArray(body.projects) ? body.projects : [];
+      if (raw.length > MAX_PROJECTS)
+        return res
+          .status(400)
+          .json({ error: `A group can have at most ${MAX_PROJECTS} projects` });
+      projects = raw
+        .map((p) => sanitizeProject(p, req.userId))
+        .filter(Boolean);
+      if (!projects.length)
+        return res.status(400).json({
+          error: "Add at least one project this group is saving for",
+        });
+    }
+
+    const constitution = projectFund
+      ? {
+          // Nothing to be late for and nothing to lend, so every rule that
+          // could fine or lend is off. Left explicit rather than defaulted:
+          // the schema's defaults turn lending ON.
+          penaltyRules: {
+            lateContribution: { enabled: false },
+            missingMeeting: { enabled: false },
+            lateRepayment: { enabled: false },
+          },
+          internalLendingEnabled: false,
+          approvalThreshold:
+            body.constitution?.approvalThreshold || "majority",
+        }
+      : body.constitution || {};
+
     // Optional co-admins named at creation — treasurer & secretary. Each becomes
     // a PENDING member with their role and gets an invite notification + SMS,
     // exactly like the /invite endpoint. Without this the phones were stored in
@@ -199,15 +334,21 @@ router.post(
     const group = new Group({
       name: body.name,
       description: body.description,
-      groupType: body.groupType || "savings-group",
+      groupType,
       avatar: body.avatar,
-      contributionAmount: body.contributionAmount || 0,
-      contributionFrequency: body.contributionFrequency || "Monthly",
-      nextContributionDate: advanceContributionDate(now, body.contributionFrequency || "Monthly"),
-      shareOutDate: body.shareOutDate ? new Date(body.shareOutDate) : undefined,
-      loanInterestRate: body.loanInterestRate ?? 5,
-      loanMaxMultiplier: body.loanMaxMultiplier ?? 3,
-      constitution: body.constitution || {},
+      contributionAmount: projectFund ? 0 : body.contributionAmount || 0,
+      contributionFrequency: projectFund
+        ? null
+        : body.contributionFrequency || "Monthly",
+      nextContributionDate: projectFund
+        ? undefined
+        : advanceContributionDate(now, body.contributionFrequency || "Monthly"),
+      shareOutDate:
+        !projectFund && body.shareOutDate ? new Date(body.shareOutDate) : undefined,
+      loanInterestRate: projectFund ? 0 : body.loanInterestRate ?? 5,
+      loanMaxMultiplier: projectFund ? 0 : body.loanMaxMultiplier ?? 3,
+      constitution,
+      projects,
       governance: {
         chairpersonUserId: req.userId,
         treasurerPhone: body.treasurerPhone,

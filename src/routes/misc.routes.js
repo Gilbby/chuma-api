@@ -22,6 +22,7 @@ import {
   getLoansIssuedThisQuarter,
   getMemberConsistency,
   getSavingsGrowth,
+  isProjectFundGroup,
 } from "../services/logic.service.js";
 import {
   initiateDeposit,
@@ -140,6 +141,13 @@ router.post(
     const group = req.group;
     const { memberId, violationType, reason } = req.body;
 
+    // Project-fund groups have no obligations to breach: nothing is due, so
+    // nothing can be late, missed or fined.
+    if (isProjectFundGroup(group))
+      return res
+        .status(400)
+        .json({ error: "This group type does not use penalties" });
+
     const validTypes = Penalty.schema.path("violationType").enumValues;
     if (!validTypes.includes(violationType))
       return res.status(400).json({ error: "Invalid violation type" });
@@ -186,6 +194,8 @@ router.post(
     const group = req.group;
     const c = group.constitution;
     if (!c) return res.json({ created: [] });
+    // Nothing to detect: no schedule to be late against, no loans to default on.
+    if (isProjectFundGroup(group)) return res.json({ created: [] });
 
     const daysLate = req.body.daysLate || 1;
     const created = [];

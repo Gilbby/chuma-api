@@ -7,7 +7,7 @@ import { requireGroupMember, isGroupAdmin } from "../middleware/groupAuth.js";
 import { paymentLimiter } from "../middleware/rateLimits.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import { rejectIfMobileMoneyHeld } from "../utils/paymentHold.js";
-import { isGroupLocked } from "../services/logic.service.js";
+import { isGroupLocked, isProjectFundGroup } from "../services/logic.service.js";
 import {
   initiateDeposit,
   providerFromPhone,
@@ -51,6 +51,22 @@ router.post(
     const group = req.group;
     if (isGroupLocked(group.toObject()))
       return res.status(423).json({ error: "Group is locked (fee unpaid)" });
+
+    // Project-fund groups (church) give toward a named project, never into an
+    // untagged pool — same rule the checkout screen enforces.
+    let projectId = null;
+    if (isProjectFundGroup(group)) {
+      const project = group.projects.id(req.body.projectId);
+      if (!project)
+        return res
+          .status(400)
+          .json({ error: "Choose which project this payment is for" });
+      if (project.status !== "active")
+        return res
+          .status(400)
+          .json({ error: "That project is closed to new contributions" });
+      projectId = project._id;
+    }
 
     const phone = payerPhone || req.user.phone;
     const isCash = paymentMethod === "Cash";
@@ -112,6 +128,7 @@ router.post(
       status: "pending",
       note: `${contributionType} contribution`,
       receiptId: generateReceiptId("CHM"),
+      meta: projectId ? { projectId } : undefined,
     });
     await txn.validate(); // ValidationError → 400 via the error middleware
 

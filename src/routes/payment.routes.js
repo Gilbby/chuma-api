@@ -8,7 +8,7 @@ import { requireGroupMember } from "../middleware/groupAuth.js";
 import { paymentLimiter } from "../middleware/rateLimits.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import { rejectIfMobileMoneyHeld } from "../utils/paymentHold.js";
-import { isGroupLocked } from "../services/logic.service.js";
+import { isGroupLocked, isProjectFundGroup } from "../services/logic.service.js";
 import {
   initiateDeposit,
   providerFromPhone,
@@ -44,6 +44,7 @@ const MAX_ITEMS = 20; // per obligation kind — nobody legitimately owes hundre
  *   topup?         (>= 0, extra savings above the base),
  *   repayments?    ([{ loanId, amount }]),
  *   penaltyIds?    ([penaltyId]),
+ *   projectId?     (project-fund groups: which project the savings pay into),
  *   paymentMethod  ("MTN MoMo" | "Airtel Money" | "Zamtel Kwacha" | "Cash" | ...),
  *   payerPhone?
  * }
@@ -138,6 +139,26 @@ router.post(
       sanitizedPenaltyIds = penalties.map((p) => p._id);
     }
 
+    // ── Project-fund groups: the savings leg names the project it pays into ──
+    // Money given for the church building has to be traceable to the church
+    // building, so a savings leg without a live project is refused rather than
+    // pooled into an untagged balance.
+    let projectId = null;
+    if (isProjectFundGroup(group)) {
+      if (contribution + topup > 0) {
+        const project = group.projects.id(req.body.projectId);
+        if (!project)
+          return res
+            .status(400)
+            .json({ error: "Choose which project this payment is for" });
+        if (project.status !== "active")
+          return res
+            .status(400)
+            .json({ error: "That project is closed to new contributions" });
+        projectId = project._id;
+      }
+    }
+
     // ── The grand total: what the member pays in one go ───────────────────────
     const grandBase = contribution + topup + loanTotal + penaltyTotal;
     if (!(grandBase > 0))
@@ -217,6 +238,7 @@ router.post(
         topup,
         repayments,
         penaltyIds: sanitizedPenaltyIds,
+        projectId,
       },
     });
     await txn.validate(); // ValidationError → 400 via the error middleware

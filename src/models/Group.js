@@ -49,6 +49,26 @@ const penaltyRuleSchema = new Schema(
   { _id: false }
 );
 
+// A named thing the group is collecting money for — "Church building",
+// "Mission trip". Project-fund groups (church) contribute toward one of these
+// instead of a fixed cycle amount, so every contribution names the project it
+// pays into and `collected` is the running total settled against it.
+const projectSchema = new Schema(
+  {
+    name: { type: String, required: true, trim: true, maxlength: 80 },
+    targetAmount: { type: Number, default: null }, // null = no goal set
+    collected: { type: Number, default: 0 },
+    status: {
+      type: String,
+      enum: ["active", "completed", "archived"],
+      default: "active",
+    },
+    createdBy: { type: Schema.Types.ObjectId, ref: "User" },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 const groupSchema = new Schema(
   {
     name: { type: String, required: true },
@@ -75,7 +95,8 @@ const groupSchema = new Schema(
     contributionAmount: { type: Number, default: 0 },
     contributionFrequency: {
       type: String,
-      enum: ["Weekly", "Bi-weekly", "Monthly"],
+      // null = no schedule at all (project-fund groups give whenever they choose)
+      enum: ["Weekly", "Bi-weekly", "Monthly", null],
       default: "Monthly",
     },
     cycleProgress: { type: Number, default: 0 }, // 0..1
@@ -140,6 +161,11 @@ const groupSchema = new Schema(
     },
 
     members: [memberSchema],
+
+    // Named savings projects. Project-fund types (church — see
+    // PROJECT_FUND_TYPES in logic.service.js) must have at least one from
+    // creation; every other type leaves this empty.
+    projects: [projectSchema],
 
     // Monthly fee / lock state
     monthlyFee: { type: Number, default: 100 },

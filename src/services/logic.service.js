@@ -7,6 +7,23 @@
 
 import config from "../config/index.js";
 
+// ─── GROUP TYPE RULES ───────────────────────────────────────────────────────
+
+/**
+ * Types that collect toward NAMED PROJECTS instead of running a contribution
+ * cycle. A church group takes whatever members choose to give, whenever they
+ * give it, and spends it on the project it was given for — so there is no
+ * fixed amount, no frequency, no deadline, no late penalty, no internal
+ * lending and no share-out. Every rule that keys off a cycle is skipped for
+ * these; what they do have is `group.projects`.
+ */
+export const PROJECT_FUND_TYPES = ["church-group"];
+
+export function isProjectFundGroup(group) {
+  const type = typeof group === "string" ? group : group?.groupType;
+  return PROJECT_FUND_TYPES.includes(type);
+}
+
 // ─── SHARE-OUT (shareOut.ts) ────────────────────────────────────────────────
 
 export function computeShareOut(members, totalProfit) {
@@ -454,6 +471,8 @@ export function countAdmins(members) {
 }
 
 export default {
+  PROJECT_FUND_TYPES,
+  isProjectFundGroup,
   computeShareOut,
   estimateGroupProfit,
   getMaxLoan,

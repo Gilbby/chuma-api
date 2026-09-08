@@ -15,6 +15,7 @@ import {
   estimateGroupProfit,
   computeLoanNetting,
   getRequiredApprovals,
+  isProjectFundGroup,
 } from "../services/logic.service.js";
 import { Loan } from "../models/Loan.js";
 import { Transaction } from "../models/Transaction.js";
@@ -434,6 +435,12 @@ router.post(
       return res
         .status(403)
         .json({ error: "Only the chairperson can start a share-out" });
+    // A project-fund group's money was given toward its projects, not saved to
+    // be split back out. There is no cycle to close and no share to compute.
+    if (isProjectFundGroup(group))
+      return res
+        .status(400)
+        .json({ error: "This group gives toward projects and does not share out" });
 
     const existing = await Approval.exists({
       groupId: group._id,
