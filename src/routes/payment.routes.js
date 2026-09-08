@@ -140,17 +140,18 @@ router.post(
     }
 
     // ── Project-fund groups: the savings leg names the project it pays into ──
-    // Money given for the church building has to be traceable to the church
-    // building, so a savings leg without a live project is refused rather than
-    // pooled into an untagged balance.
+    // Naming one is optional — a general offering is given to the church, not
+    // to any one thing, and shows as "General giving" on the statement. A
+    // project that WAS named has to be able to take the money though: money
+    // meant for the church building must not fall quietly into the pool.
     let projectId = null;
-    if (isProjectFundGroup(group)) {
+    if (isProjectFundGroup(group) && req.body.projectId) {
       if (contribution + topup > 0) {
         const project = group.projects.id(req.body.projectId);
         if (!project)
           return res
             .status(400)
-            .json({ error: "Choose which project this payment is for" });
+            .json({ error: "That project no longer exists" });
         if (project.status !== "active")
           return res
             .status(400)

@@ -52,15 +52,18 @@ router.post(
     if (isGroupLocked(group.toObject()))
       return res.status(423).json({ error: "Group is locked (fee unpaid)" });
 
-    // Project-fund groups (church) give toward a named project, never into an
-    // untagged pool — same rule the checkout screen enforces.
+    // Project-fund groups (church) name the project a gift pays into. Naming
+    // one is optional: a general offering is given to the church rather than
+    // to any one thing, and lands on the statement as "General giving". What
+    // is refused is a project that was named and cannot take the money — a
+    // gift meant for the building fund must not fall quietly into the pool.
     let projectId = null;
-    if (isProjectFundGroup(group)) {
+    if (isProjectFundGroup(group) && req.body.projectId) {
       const project = group.projects.id(req.body.projectId);
       if (!project)
         return res
           .status(400)
-          .json({ error: "Choose which project this payment is for" });
+          .json({ error: "That project no longer exists" });
       if (project.status !== "active")
         return res
           .status(400)
