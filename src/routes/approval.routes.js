@@ -183,6 +183,27 @@ router.post(
       if (claimed) {
         result = claimed;
         executed = await executeApproval(claimed, req);
+
+        // The action ran, so the approval is CARRIED OUT — the same stamp the
+        // /execute route applies. Without it the approval sits at "approved",
+        // which the app reads as "approved but never happened" and answers
+        // with a Run again button, on money that has already moved.
+        //
+        // A "-blocked" result is the one case where it genuinely did not run
+        // (the wallet could not cover it): that stays "approved" so Run again
+        // still means something. A null result means there was nothing to act
+        // on, which is not the same as having acted, so it stays too.
+        //
+        // Matching on status "approved" keeps this from overwriting a branch
+        // that already stamped itself, or a later state set while we ran.
+        if (executed && !executed.type?.endsWith("-blocked")) {
+          const done = await Approval.findOneAndUpdate(
+            { _id: claimed._id, status: "approved" },
+            { status: "executed" },
+            { new: true }
+          );
+          if (done) result = done;
+        }
       }
     }
 

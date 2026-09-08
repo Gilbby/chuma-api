@@ -1,6 +1,7 @@
 import { Transaction } from "../models/Transaction.js";
 import { Group } from "../models/Group.js";
 import { generateReceiptId } from "../utils/helpers.js";
+import { isProjectFundGroup } from "./logic.service.js";
 
 /**
  * Member account statement — the bank-statement view of one member's money.
@@ -162,6 +163,80 @@ function describe(txn) {
  * Build a statement for `memberId` over [from, to], optionally scoped to one
  * group. `to` is inclusive of the whole day the caller passed.
  */
+/**
+ * What a project fund's giving actually paid for, one row per project.
+ *
+ * "You gave K800" is a number, not an account. A church member gives toward
+ * named things and the statement has to name them back: K500 Church building,
+ * K300 Mission trip. Each contribution carries the project it paid into on
+ * meta.projectId (written by contribution.routes.js and payment.routes.js), so
+ * these rows are built from the same settled movements as the savings ledger
+ * and sum to the same `savingsIn`.
+ *
+ * Giving that names no project — made before the group opened one, or to a
+ * project since archived away — lands under "General giving" rather than
+ * disappearing. The rows have to add up to what the member actually gave, or
+ * the itemisation is worse than none.
+ *
+ * Savings groups produce no rows at all: their contributions buy a stake, not
+ * a project.
+ */
+async function buildProjectGiving(txns) {
+  const giving = txns.filter((t) => savingsDelta(t) > 0);
+  if (giving.length === 0) return [];
+
+  const groupIds = [
+    ...new Set(giving.map((t) => t.groupId).filter(Boolean).map(String)),
+  ];
+  if (groupIds.length === 0) return [];
+
+  const funds = new Map(
+    (
+      await Group.find({ _id: { $in: groupIds } })
+        .select("name groupType projects")
+        .lean()
+    )
+      .filter(isProjectFundGroup)
+      .map((g) => [String(g._id), g])
+  );
+  if (funds.size === 0) return [];
+
+  const rows = new Map();
+  for (const t of giving) {
+    const group = funds.get(String(t.groupId));
+    if (!group) continue; // a savings group's contribution is not project giving
+
+    const projectId = t.meta?.projectId ? String(t.meta.projectId) : null;
+    const project = projectId
+      ? (group.projects || []).find((p) => String(p._id) === projectId)
+      : null;
+
+    // Key on the group too: two groups may run projects of the same name.
+    const key = `${group._id}:${projectId ?? "general"}`;
+    const row = rows.get(key) ?? {
+      projectId,
+      name: project?.name ?? "General giving",
+      groupId: String(group._id),
+      groupName: group.name,
+      // The group's own progress, for context beside what THIS member gave.
+      targetAmount: project?.targetAmount ?? null,
+      collected: project?.collected ?? 0,
+      status: project?.status ?? null,
+      amount: 0,
+      count: 0,
+    };
+    row.amount += savingsDelta(t);
+    row.count += 1;
+    rows.set(key, row);
+  }
+
+  // Largest gift first — the project they have backed most is the one they
+  // opened the statement to check.
+  return [...rows.values()]
+    .map((r) => ({ ...r, amount: Math.round(r.amount * 100) / 100 }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
 export async function buildStatement({ user, groupId, from, to }) {
   const memberId = user._id;
   const scope = groupId ? { groupId } : {};
@@ -286,12 +361,24 @@ export async function buildStatement({ user, groupId, from, to }) {
     out: side(byPurpose.out, totals.moneyOut),
   };
 
+  // Per-project giving. Empty for a savings group, so the client can key the
+  // whole section off whether there are rows.
+  const projects = await buildProjectGiving(txns);
+
   let group = null;
   if (groupId) {
-    const g = await Group.findById(groupId).select("name members").lean();
+    const g = await Group.findById(groupId)
+      .select("name groupType members")
+      .lean();
     const me = g?.members?.find((m) => String(m.userId) === String(memberId));
     group = g
-      ? { id: String(g._id), name: g.name, role: me?.role ?? "Member" }
+      ? {
+          id: String(g._id),
+          name: g.name,
+          // The client words the whole statement off this — savings or giving.
+          groupType: g.groupType,
+          role: me?.role ?? "Member",
+        }
       : null;
   }
 
@@ -307,6 +394,7 @@ export async function buildStatement({ user, groupId, from, to }) {
     savingsOut,
     totals,
     breakdown,
+    projects,
     lines,
     activity,
   };
