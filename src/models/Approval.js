@@ -45,6 +45,14 @@ const approvalSchema = new Schema(
     // Reference to the entity being approved (loan id, member row id, etc.)
     refId: { type: Schema.Types.ObjectId },
 
+    // cash-receipt only: whose job this receipt is. The treasurer keeps the
+    // cash box, so it is theirs — and only when the group has no treasurer
+    // does it fall to the chairperson. Stored when the receipt is raised so a
+    // screen can name the right person without re-reading the roster, and so
+    // the history stays truthful after roles change. Any admin may still
+    // answer it; this records who it was ADDRESSED to.
+    confirmerRole: { type: String, enum: ["Treasurer", "Chairperson"] },
+
     // Who a "member-removal" is about. They may hold an admin role themselves,
     // and nobody votes on their own removal — the vote route reads this to keep
     // them out of the quorum that decides it.

@@ -11,11 +11,18 @@
  * It differs from the rest only in the bar — ONE admin, not a quorum, because
  * the person holding the cash is the one who knows.
  *
+ * The one admin is the treasurer, who keeps the cash box, and the chairperson
+ * only in a group that has no treasurer. Any admin may still answer a receipt —
+ * a treasurer on a bus must not freeze the group's savings — but the duty is
+ * named, and the chairperson is told by SMS whenever cash is confirmed, so the
+ * handover is witnessed by someone other than the person holding the notes.
+ *
  * Both routes into it (the confirm button on the notification, and a vote on
  * the approvals screen) come through resolveCashReceipt, so the transaction and
  * the approval can never disagree about what happened.
  */
 import { Approval } from "../models/Approval.js";
+import { Group } from "../models/Group.js";
 import { Transaction } from "../models/Transaction.js";
 import { notify, notifyAll } from "./notify.service.js";
 import { settleCompletedTransaction } from "./settlement.service.js";
@@ -52,6 +59,15 @@ export async function raiseCashReceipt({ group, txn, payerName }) {
   const amount = Math.abs(txn.amount);
   const label = labelFor(txn);
 
+  const active = group.members.filter((m) => m.status === "active" && m.userId);
+  const treasurers = active.filter((m) => m.role === "Treasurer");
+  // Whose duty this is. Treasurer by default — they keep the cash box — and
+  // the chairperson only as the fallback for a group that has no treasurer.
+  const confirmerRole = treasurers.length ? "Treasurer" : "Chairperson";
+  const recipients = treasurers.length
+    ? treasurers
+    : active.filter((m) => m.role === "Chairperson");
+
   const approval = await Approval.create({
     groupId: group._id,
     groupName: group.name,
@@ -62,16 +78,12 @@ export async function raiseCashReceipt({ group, txn, payerName }) {
     requestedById: txn.memberId,
     requestedBy: payerName,
     refId: txn._id,
+    confirmerRole,
     // One admin. The cash is in someone's hands or it isn't; a second opinion
     // adds nothing but a delay to the member's savings.
     requiredApprovals: 1,
   });
 
-  const active = group.members.filter((m) => m.status === "active" && m.userId);
-  const treasurers = active.filter((m) => m.role === "Treasurer");
-  const recipients = treasurers.length
-    ? treasurers
-    : active.filter((m) => m.role === "Chairperson");
   // SMS as well: nothing is credited until one of these people confirms, and
   // they are usually holding the notes rather than watching their inbox.
   await notifyAll(
@@ -121,6 +133,44 @@ export async function resolveCashReceipt({ txn, admin, received }) {
     return { error: "Already confirmed or declined", status: 409 };
 
   if (received) await settleCompletedTransaction(updated);
+
+  // The chairperson is told when cash lands, even though confirming is not
+  // their job. Handing over notes is the one movement of group money nobody
+  // else witnesses: the member gives, the treasurer confirms, and without this
+  // the chairperson learns of it only if they go looking. They are excluded
+  // when they are the one who confirmed, or the one who paid — they already
+  // know, and an SMS costs credit.
+  if (received) {
+    const group = await Group.findById(updated.groupId)
+      .select("members name")
+      .lean();
+    const chairs = (group?.members || []).filter(
+      (m) =>
+        m.status === "active" &&
+        m.userId &&
+        m.role === "Chairperson" &&
+        String(m.userId) !== String(admin.userId) &&
+        String(m.userId) !== String(updated.memberId)
+    );
+    if (chairs.length) {
+      const label = labelFor(updated);
+      const paid = Math.abs(updated.amount);
+      const payer = updated.memberName || "A member";
+      await notifyAll(
+        chairs.map((m) => m.userId),
+        {
+          type: "governance",
+          title: `Cash ${label} received`,
+          body: `${admin.name} confirmed receiving K${paid} in cash from ${payer}. The money is with them and ${payer}'s account has been credited.`,
+          groupId: updated.groupId,
+          groupName: updated.groupName,
+          transactionId: updated._id,
+          sms: true,
+          smsText: `Chuma: ${admin.name} confirmed receiving K${paid} cash from ${payer} for ${updated.groupName}. The money is now with them.`,
+        }
+      );
+    }
+  }
 
   // Close the approval this receipt was raised as, unless the vote route is
   // already doing it (it claims the approval before executing, and passes
