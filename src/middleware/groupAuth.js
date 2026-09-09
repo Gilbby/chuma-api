@@ -24,8 +24,14 @@ export function isGroupAdmin(group, userId) {
  * Require the caller to be an active member of the group identified by
  * `source` (a param/query/body field, e.g. "id" or "groupId").
  * Attaches req.group (mongoose doc) and req.member (their member subdoc).
+ *
+ * A group whose registration fee has not settled yet is refused with 423: it
+ * exists only so that first payment has somewhere to land, and nothing inside
+ * it may be read or written until the deposit COMPLETES. The two routes the
+ * founder still needs — reading the group and retrying the payment — opt out
+ * with `{ allowPendingPayment: true }`.
  */
-export function requireGroupMember(source = "id") {
+export function requireGroupMember(source = "id", { allowPendingPayment = false } = {}) {
   return asyncHandler(async (req, res, next) => {
     const groupId = resolveGroupId(req, source);
     if (!groupId || !mongoose.isValidObjectId(groupId))
@@ -38,6 +44,12 @@ export function requireGroupMember(source = "id") {
     if (!member)
       return res.status(403).json({ error: "Not a member of this group" });
 
+    if (!allowPendingPayment && group.status === "pending-payment")
+      return res.status(423).json({
+        error: "This group is not active yet — its registration fee is still being confirmed",
+        code: "group_pending_payment",
+      });
+
     req.group = group;
     req.member = member;
     next();
@@ -48,8 +60,8 @@ export function requireGroupMember(source = "id") {
  * Same as requireGroupMember, but the member must also hold an admin role
  * (Chairperson / Treasurer / Secretary).
  */
-export function requireGroupAdmin(source = "id") {
-  const memberCheck = requireGroupMember(source);
+export function requireGroupAdmin(source = "id", options) {
+  const memberCheck = requireGroupMember(source, options);
   return (req, res, next) =>
     memberCheck(req, res, (err) => {
       if (err) return next(err);

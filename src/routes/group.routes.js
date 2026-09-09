@@ -23,6 +23,7 @@ import {
   getMonthsOwed,
   getAmountOwed,
   isGroupLocked,
+  isAwaitingFirstPayment,
   advanceContributionDate,
   getRepaymentRate,
   getDefaults,
@@ -53,16 +54,19 @@ const MAX_PROJECTS = 30;
 /**
  * Normalise one client-supplied project into what the schema stores. Returns
  * null when the name is missing/blank — the caller decides whether that is an
- * error or a row to skip. `targetAmount` is optional: anything not a positive
- * number becomes null, meaning "no goal set".
+ * error or a row to skip. `targetAmount` and `deadline` are both optional:
+ * anything not a positive number becomes null ("no goal set"), and anything
+ * that is not a usable date becomes null ("collect for as long as it takes").
  */
 function sanitizeProject(raw, userId) {
   const name = typeof raw?.name === "string" ? raw.name.trim().slice(0, 80) : "";
   if (!name) return null;
   const target = Number(raw?.targetAmount);
+  const deadline = raw?.deadline ? new Date(raw.deadline) : null;
   return {
     name,
     targetAmount: Number.isFinite(target) && target > 0 ? target : null,
+    deadline: deadline && !Number.isNaN(deadline.getTime()) ? deadline : null,
     collected: 0,
     status: "active",
     createdBy: userId,
@@ -122,8 +126,11 @@ router.get(
     const identity = [{ userId: req.userId }];
     if (req.user.phone) identity.push({ phone: req.user.phone });
 
+    // "pending-payment" groups are excluded: their registration fee has not
+    // landed, so they may never start. Their invites are sent (and become
+    // visible here) only once the fee settles.
     const groups = await Group.find({
-      status: { $ne: "closed" },
+      status: { $nin: ["closed", "pending-payment"] },
       members: { $elemMatch: { status: "pending", $or: identity } },
     }).lean();
 
@@ -160,7 +167,7 @@ router.get(
 router.get(
   "/:id",
   requireAuth,
-  requireGroupMember("id"),
+  requireGroupMember("id", { allowPendingPayment: true }),
   asyncHandler(async (req, res) => {
     res.json({ group: withFeeStatus(req.group) });
   })
@@ -168,7 +175,7 @@ router.get(
 
 /**
  * POST /api/groups/:id/projects  (auth, Chairperson) — add a savings project.
- * Body: { name, targetAmount? }
+ * Body: { name, targetAmount?, deadline? }
  *
  * Only the Chairperson may open a new project: it decides what members'
  * money can be given toward, so it is a rule change, not day-to-day admin.
@@ -244,7 +251,7 @@ router.post(
  *         loanMaxMultiplier, constitution, projects, payerPhone }
  *
  * Project-fund types (church) ignore every cycle field above and require
- * `projects: [{ name, targetAmount? }]` with at least one entry instead.
+ * `projects: [{ name, targetAmount?, deadline? }]` with at least one entry instead.
  */
 router.post(
   "/",
@@ -360,6 +367,10 @@ router.post(
       // the group sits at the start of its grace window (5 days — far longer
       // than a callback takes).
       feePaidThrough: now,
+      // Nobody can open or use the group until the fee deposit COMPLETES —
+      // settlement.service.js flips this to "active". Until then the founder
+      // can only view it and retry the payment.
+      status: "pending-payment",
       members: [
         {
           userId: req.userId,
@@ -379,7 +390,6 @@ router.post(
           status: "pending",
         })),
       ],
-      status: "active",
     });
     await group.validate(); // ValidationError → 400 via the error middleware
 
@@ -414,26 +424,10 @@ router.post(
 
     await group.save();
 
-    // Notify + SMS the treasurer/secretary now that the group exists. Same
-    // pattern as /invite: in-app notification only if they already have an
-    // account; SMS always so an unregistered invitee knows to sign up.
-    for (const c of coAdminInvites) {
-      if (c.invited) {
-        await Notification.create({
-          userId: c.invited._id,
-          type: "invite",
-          title: "Group invitation",
-          body: `${req.user.name} invited you to join ${group.name} as ${c.role}.`,
-          groupId: group._id,
-          groupName: group.name,
-          invitedBy: req.user.name,
-        });
-      }
-      await sendSms(
-        c.normalized,
-        `${req.user.name} invited you to join ${group.name} on Chuma as ${c.role}. Download the app and sign up with this number to join.`
-      );
-    }
+    // The treasurer/secretary invitations are NOT sent here: the group is still
+    // "pending-payment" and may never start. settleCompletedTransaction sends
+    // them the moment the fee lands, so nobody is invited to a group that does
+    // not exist yet.
 
     // Record the fee transaction
     feeTxn.pawapay = { depositId: deposit.id, status: deposit.status };
@@ -443,10 +437,18 @@ router.post(
     if (feeTxn.status === "completed") {
       await settleCompletedTransaction(feeTxn);
       const settled = await Group.findById(group._id);
-      return res.status(201).json({ group: withFeeStatus(settled) });
+      return res.status(201).json({
+        group: withFeeStatus(settled),
+        feeTransaction: { id: String(feeTxn._id), status: feeTxn.status },
+      });
     }
 
-    res.status(201).json({ group: withFeeStatus(group) });
+    // 201 with a group the client must NOT treat as usable — it has to wait for
+    // feeTransaction to reach "completed" before opening the dashboard.
+    res.status(201).json({
+      group: withFeeStatus(group),
+      feeTransaction: { id: String(feeTxn._id), status: feeTxn.status },
+    });
   })
 );
 
@@ -825,7 +827,7 @@ router.post(
 router.get(
   "/:id/fee",
   requireAuth,
-  requireGroupMember("id"),
+  requireGroupMember("id", { allowPendingPayment: true }),
   asyncHandler(async (req, res) => {
     const g = req.group.toObject();
     res.json({
@@ -850,14 +852,25 @@ router.post(
   requireAuth,
   requireRealName,
   paymentLimiter,
-  requireGroupMember("id"),
+  requireGroupMember("id", { allowPendingPayment: true }),
   asyncHandler(async (req, res) => {
     const group = req.group;
     const g = group.toObject();
-    const months = getMonthsOwed(g);
-    const amount = getAmountOwed(g);
+    // A group still waiting on its registration fee owes month 1 even though
+    // feePaidThrough was optimistically stamped at creation — this route is how
+    // the founder retries after cancelling or failing the mobile-money prompt.
+    const awaitingFirst = isAwaitingFirstPayment(g);
+    const months = awaitingFirst ? 1 : getMonthsOwed(g);
+    const amount = awaitingFirst ? g.monthlyFee : getAmountOwed(g);
     if (months <= 0)
       return res.json({ message: "Fee already paid", monthsOwed: 0 });
+
+    // Only the founder can settle the very first fee: until it lands there are
+    // no other active members, and it is their group being paid for.
+    if (awaitingFirst && req.member.role !== "Chairperson")
+      return res
+        .status(403)
+        .json({ error: "Only the Chairperson can pay the registration fee" });
 
     const payerPhone = req.body.payerPhone || req.user.phone;
 

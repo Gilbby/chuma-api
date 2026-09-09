@@ -57,6 +57,7 @@ const projectSchema = new Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 80 },
     targetAmount: { type: Number, default: null }, // null = no goal set
+    deadline: { type: Date, default: null }, // null = collect for as long as it takes
     collected: { type: Number, default: 0 },
     status: {
       type: String,
@@ -180,9 +181,14 @@ const groupSchema = new Schema(
     defaults: { type: Number },
     memberRetention: { type: Number },
 
+    // "pending-payment" is where every new group starts: the registration fee
+    // has been requested from the founder's wallet but the mobile-money PIN has
+    // not been confirmed yet. The group exists so the fee has something to
+    // settle against, but nobody can use it until the deposit COMPLETES —
+    // see isAwaitingFirstPayment / isGroupLocked in logic.service.js.
     status: {
       type: String,
-      enum: ["active", "closed", "deletion-pending"],
+      enum: ["pending-payment", "active", "closed", "deletion-pending"],
       default: "active",
     },
   },

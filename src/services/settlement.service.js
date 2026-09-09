@@ -5,6 +5,7 @@ import { PlatformRevenue } from "../models/PlatformRevenue.js";
 import { Transaction } from "../models/Transaction.js";
 import { advancePaidThrough } from "./logic.service.js";
 import { notify, notifyAll } from "./notify.service.js";
+import { sendSms } from "./sms.service.js";
 
 /**
  * Settlement service — the ONLY place payment side effects are applied.
@@ -181,6 +182,58 @@ async function applyLoanRepayment({ loanId, amount }) {
   );
 }
 
+/**
+ * A group's registration fee has settled and it has just gone from
+ * "pending-payment" to "active". Its co-admin invitations were held back until
+ * this moment — inviting people into a group that might never start would leave
+ * them holding an invite to nothing — so they go out now.
+ *
+ * In-app notification only for invitees who already have an account; SMS to
+ * everyone, so an unregistered invitee knows to sign up.
+ */
+async function announceGroupActivated(groupId) {
+  const group = await Group.findById(groupId).lean();
+  if (!group) return;
+
+  const chair = (group.members || []).find(
+    (m) => m.role === "Chairperson" && m.status === "active"
+  );
+  const inviterName = chair?.name || "A Chuma user";
+
+  for (const m of group.members || []) {
+    if (m.status !== "pending" || !m.phone) continue;
+    if (m.userId) {
+      await notify({
+        userId: m.userId,
+        type: "invite",
+        title: "Group invitation",
+        body: `${inviterName} invited you to join ${group.name} as ${m.role}.`,
+        groupId: group._id,
+        groupName: group.name,
+        invitedBy: inviterName,
+      });
+    }
+    // Straight to SMS: an invitee without an account has no inbox to write to.
+    await sendSms(
+      m.phone,
+      `${inviterName} invited you to join ${group.name} on Chuma as ${m.role}. Download the app and sign up with this number to join.`
+    );
+  }
+
+  if (chair?.userId) {
+    await notify({
+      userId: chair.userId,
+      type: "governance",
+      title: "Group is now active",
+      body: `${group.name} is live — the registration fee was received.`,
+      groupId: group._id,
+      groupName: group.name,
+      sms: true,
+      smsText: `Chuma: ${group.name} is now active. Your registration fee was received.`,
+    });
+  }
+}
+
 export async function settleCompletedTransaction(txn) {
   switch (txn.type) {
     case "contribution": {
@@ -248,6 +301,15 @@ export async function settleCompletedTransaction(txn) {
 
     case "fee": {
       const months = Number(txn.meta?.months) || 1;
+      // The registration fee has landed, so a group that was only a shell for
+      // this payment becomes usable. Guarded on the pending status so a
+      // replayed callback cannot revive a group that was since closed, and so
+      // the invites below go out exactly once.
+      const { modifiedCount: activated } = await Group.updateOne(
+        { _id: txn.groupId, status: "pending-payment" },
+        { $set: { status: "active" } }
+      );
+      if (activated) await announceGroupActivated(txn.groupId);
       // CAS loop: feePaidThrough is date arithmetic on its own current value,
       // so guard the write on the value we read — otherwise a concurrent fee
       // settlement overwrites ours and paid months are silently lost.

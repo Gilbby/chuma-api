@@ -221,7 +221,23 @@ export function getAmountOwed(group) {
   return getMonthsOwed(group) * (group.monthlyFee ?? 0);
 }
 
+/**
+ * True while a brand-new group is still waiting for its registration fee to
+ * settle. The founder has been sent a mobile-money prompt but has not confirmed
+ * it (or it failed), so the group exists only as a shell for that payment to
+ * land against — every action inside it is refused until the deposit COMPLETES.
+ */
+export function isAwaitingFirstPayment(group) {
+  return group?.status === "pending-payment";
+}
+
 export function getGraceInfo(group) {
+  // Nothing has ever been paid, so this is not a grace window — it is a group
+  // that has not started yet. Reported separately so the client can say
+  // "waiting for payment" instead of "your fee is overdue".
+  if (isAwaitingFirstPayment(group)) {
+    return { status: "pending-payment", daysIntoGrace: 0, daysLeft: 0 };
+  }
   if (!group.feePaidThrough || !group.monthlyFee) {
     return { status: "paid", daysIntoGrace: 0, daysLeft: GRACE_PERIOD_DAYS };
   }
@@ -242,8 +258,11 @@ export function getGraceInfo(group) {
   return { status: "locked", daysIntoGrace: GRACE_PERIOD_DAYS, daysLeft: 0 };
 }
 
+// Locked covers both reasons a group cannot be used: the fee lapsed past its
+// grace window, or it never started because the first fee has not settled.
 export function isGroupLocked(group) {
-  return getGraceInfo(group).status === "locked";
+  const { status } = getGraceInfo(group);
+  return status === "locked" || status === "pending-payment";
 }
 
 export function advancePaidThrough(group, monthsPaid) {
@@ -483,6 +502,7 @@ export default {
   getAmountOwed,
   getGraceInfo,
   isGroupLocked,
+  isAwaitingFirstPayment,
   advancePaidThrough,
   advanceContributionDate,
   findLateContributors,
