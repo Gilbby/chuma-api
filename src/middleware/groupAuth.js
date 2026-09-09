@@ -50,6 +50,18 @@ export function requireGroupMember(source = "id", { allowPendingPayment = false 
         code: "group_pending_payment",
       });
 
+    // A closed (deleted) group is history, not a workspace. Everything written
+    // into it — transactions, receipts, penalties, the lines behind a member's
+    // statement — is deliberately kept and stays readable, so a GET goes
+    // through. Anything that would write into a group its members no longer
+    // have does not.
+    if (group.status === "closed" && req.method !== "GET")
+      return res.status(410).json({
+        error:
+          "This group has been closed. Its records stay available, but nothing new can be added to it.",
+        code: "group_closed",
+      });
+
     req.group = group;
     req.member = member;
     next();

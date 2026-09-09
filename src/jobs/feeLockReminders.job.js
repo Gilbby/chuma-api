@@ -24,6 +24,9 @@ export async function runFeeLockReminders() {
   const groups = await Group.find({
     monthlyFee: { $exists: true },
     feePaidThrough: { $exists: true },
+    // A closed group owes nothing. Chasing its fee would send an SMS about a
+    // group that no longer exists for the people getting it.
+    status: { $ne: "closed" },
   });
 
   const now = new Date();

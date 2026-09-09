@@ -14,7 +14,7 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { pricePayout } from "../services/pricing.service.js";
-import { notify } from "../services/notify.service.js";
+import { notify, notifyAll } from "../services/notify.service.js";
 import { config } from "../config/index.js";
 import { distributeShareOut } from "../services/shareout.service.js";
 import { resolveCashReceipt } from "../services/cashReceipt.service.js";
@@ -155,6 +155,16 @@ router.post(
         result = claimed;
         if (claimed.type === "loan" && claimed.refId)
           await Loan.findByIdAndUpdate(claimed.refId, { status: "rejected" });
+        // A rejected deletion has to give the group back. It was parked at
+        // "deletion-pending" the moment the vote was raised, and nothing else
+        // ever moves it off that — leave it and the group is neither deleted
+        // nor usable. Matched on the parked status so this cannot overwrite a
+        // state something else set while the vote ran.
+        if (claimed.type === "group-deletion" && claimed.groupId)
+          await Group.updateOne(
+            { _id: claimed.groupId, status: "deletion-pending" },
+            { $set: { status: "active" } }
+          );
         // Rejecting a cash receipt means the money never arrived: fail the
         // transaction and tell the member, exactly as declining from the
         // notification does.
@@ -523,7 +533,32 @@ async function executeApproval(approval, req) {
   }
 
   if (approval.type === "group-deletion" && approval.groupId) {
-    await Group.findByIdAndUpdate(approval.groupId, { status: "closed" });
+    // Closing is all that happens: the group document and every transaction,
+    // receipt, penalty and statement line under it stay put. The group drops
+    // out of everyone's list and stops accepting anything new — see the
+    // delete-request route and requireGroupMember.
+    const group = await Group.findByIdAndUpdate(
+      approval.groupId,
+      { status: "closed" },
+      { new: true }
+    );
+    const closedMembers = (group?.members || []).filter(
+      (m) => m.status === "active" && m.userId
+    );
+    if (closedMembers.length)
+      await notifyAll(
+        closedMembers.map((m) => m.userId),
+        {
+          type: "governance",
+          title: "Group closed",
+          body: `${approval.groupName || "The group"} has been closed. Your record of it — contributions, receipts and statements — stays in the app.`,
+          groupId: approval.groupId,
+          groupName: approval.groupName,
+          // Their group has ended. They should not find out from it vanishing.
+          sms: true,
+          smsText: `Chuma: ${approval.groupName || "Your group"} has been closed. Your statements and receipts for it stay in the app.`,
+        }
+      );
     return { type: "group-closed", groupId: approval.groupId };
   }
 

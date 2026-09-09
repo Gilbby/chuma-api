@@ -91,15 +91,21 @@ function withFeeStatus(group) {
 
 /**
  * GET /api/groups  (auth) — groups the user belongs to
+ *
+ * Closed (deleted) groups are left out: they are gone as far as saving,
+ * lending and every picker is concerned. `?includeClosed=true` puts them back
+ * for the screens whose job is the past — a statement of a group that ended
+ * last year still has to be reachable.
  */
 router.get(
   "/",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const groups = await Group.find({
+    const filter = {
       members: { $elemMatch: { userId: req.userId, status: "active" } },
-      status: { $ne: "closed" },
-    }).lean();
+    };
+    if (req.query.includeClosed !== "true") filter.status = { $ne: "closed" };
+    const groups = await Group.find(filter).lean();
     res.json({ groups: groups.map(withFeeStatus) });
   })
 );
@@ -1094,15 +1100,35 @@ router.post(
 );
 
 /**
- * POST /api/groups/:id/delete-request  (auth, admin) — request group deletion.
- * Blocked if open loans/savings exist. Routes to admin approval.
+ * POST /api/groups/:id/delete-request  (auth, admin) — delete a group.
+ *
+ * Nothing is erased. Deleting a group CLOSES it: the group document, every
+ * transaction, receipt, penalty, loan and statement line stays exactly where it
+ * is, so a member can still pull a statement for a group that ended a year ago.
+ * What changes is that the group leaves everyone's list of groups and nothing
+ * new can be written into it.
+ *
+ * The money has to be out first — open loans or savings still in the pool block
+ * it, because closing over either would strand real money.
+ *
+ * Who decides depends on who else is there. With other admins to vote, this
+ * raises a group-deletion approval and the group sits at "deletion-pending"
+ * until they answer. With nobody else to ask — the founder of a group nobody
+ * else ever joined, which is the group most likely to need deleting — there is
+ * no quorum to reach, so it closes on the spot.
  */
 router.post(
   "/:id/delete-request",
   requireAuth,
-  requireGroupAdmin("id"),
+  // A group whose registration fee never settled is exactly the one a founder
+  // wants gone, so this route is one of the few that works inside one.
+  requireGroupAdmin("id", { allowPendingPayment: true }),
   asyncHandler(async (req, res) => {
     const group = req.group;
+
+    if (group.status === "closed")
+      return res.status(400).json({ error: "This group is already closed" });
+
     const openLoans = await Loan.countDocuments({
       groupId: group._id,
       status: { $in: ["active", "pending", "overdue"] },
@@ -1116,22 +1142,102 @@ router.post(
         error: "Cannot delete: group still holds savings. Share out first.",
       });
 
+    const existing = await Approval.findOne({
+      groupId: group._id,
+      type: "group-deletion",
+      status: "pending",
+    });
+    if (existing)
+      return res.status(409).json({
+        error: "A deletion is already awaiting a decision for this group",
+        approval: existing,
+      });
+
+    // Everyone entitled to vote on this: active admins other than whoever asked.
+    const voters = group.members.filter(
+      (m) =>
+        m.status === "active" &&
+        m.userId &&
+        ADMIN_ROLES.includes(m.role) &&
+        String(m.userId) !== String(req.userId)
+    );
+    // Everyone who loses a group if this goes through, admin or not.
+    const others = group.members.filter(
+      (m) =>
+        m.status === "active" &&
+        m.userId &&
+        String(m.userId) !== String(req.userId)
+    );
+
+    if (voters.length === 0) {
+      await Group.updateOne({ _id: group._id }, { $set: { status: "closed" } });
+      // Ordinary members can still be here with no second admin — they are not
+      // asked, but they are told.
+      if (others.length)
+        await notifyAll(
+          others.map((m) => m.userId),
+          {
+            type: "governance",
+            title: "Group closed",
+            body: `${req.user.name} closed ${group.name}. Your record of it — contributions, receipts and statements — stays in the app.`,
+            groupId: group._id,
+            groupName: group.name,
+            sms: true,
+            smsText: `Chuma: ${req.user.name} closed ${group.name}. Your statements and receipts for it stay in the app.`,
+          }
+        );
+      return res.json({
+        message: "Group deleted",
+        deleted: true,
+        requiredApprovals: 0,
+        eligibleVoters: 0,
+      });
+    }
+
+    const required = getRequiredApprovals(
+      group.constitution?.approvalThreshold || "majority",
+      voters.length
+    );
+
     const approval = await Approval.create({
       groupId: group._id,
       groupName: group.name,
       type: "group-deletion",
       title: `Delete ${group.name}`,
-      description: req.body.reason || "Group deletion requested",
+      description:
+        req.body?.reason?.trim() ||
+        `Deletion of ${group.name} requested by ${req.user.name}`,
       requestedById: req.userId,
       requestedBy: req.user.name,
-      requiredApprovals: 2,
+      requiredApprovals: required,
     });
 
     await Group.updateOne(
       { _id: group._id },
       { $set: { status: "deletion-pending" } }
     );
-    res.json({ message: "Deletion requested, pending admin approval", approval });
+
+    await notifyAll(
+      voters.map((v) => v.userId),
+      {
+        type: "governance",
+        title: "Group deletion proposed",
+        body: `${req.user.name} proposed deleting ${group.name}. ${required} approval${required === 1 ? "" : "s"} needed. Past records stay in the app either way.`,
+        groupId: group._id,
+        groupName: group.name,
+        // The end of the group is waiting on these people to answer.
+        sms: true,
+        smsText: `Chuma: ${req.user.name} proposed deleting ${group.name}. ${required} approval${required === 1 ? "" : "s"} needed. Vote in the app.`,
+      }
+    );
+
+    res.json({
+      message: "Deletion requested, pending admin approval",
+      deleted: false,
+      approval,
+      requiredApprovals: required,
+      eligibleVoters: voters.length,
+    });
   })
 );
 
