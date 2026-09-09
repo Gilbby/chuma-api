@@ -134,7 +134,7 @@ export function purposeLegs(txn) {
   }
 }
 
-function describe(txn) {
+export function describe(txn) {
   switch (txn.type) {
     case "contribution":
       return txn.contributionType === "topup"
@@ -167,7 +167,7 @@ function describe(txn) {
  * twice. Pending transactions count — a gift awaiting confirmation still names
  * the project it was meant for.
  */
-async function loadProjectFunds(txns) {
+export async function loadProjectFunds(txns) {
   const groupIds = [
     ...new Set(txns.map((t) => t.groupId).filter(Boolean).map(String)),
   ];
@@ -199,7 +199,7 @@ async function loadProjectFunds(txns) {
  * Returns null for a savings group and for anything that is not giving — a fee
  * or a penalty paid on its own keeps the wording the API already gives it.
  */
-function projectLabelFor(funds, txn) {
+export function projectLabelFor(funds, txn) {
   const group = funds.get(String(txn.groupId));
   if (!group) return null;
   if (txn.type !== "contribution" && txn.type !== "combined") return null;
@@ -454,4 +454,34 @@ export async function buildStatement({ user, groupId, from, to }) {
   };
 }
 
-export default { buildStatement, savingsDelta, purposeLegs };
+/**
+ * Attach the display name to a list of transactions, in place of the raw type.
+ *
+ * The type alone is not a name a member recognises. Nearly every payment the
+ * unified checkout produces is stored as `combined`, so a client rendering
+ * `txn.type` shows people the word "Combined" for the thing they just paid —
+ * which is why the transaction lists needed this and the statement already had
+ * it. Both now read the same two fields, so a payment cannot be called one
+ * thing in Recent activity and another on the statement.
+ *
+ * Costs one Group query for the project-fund groups involved, and none at all
+ * when the member belongs to no project-fund group.
+ */
+export async function withDescriptions(txns) {
+  const funds = await loadProjectFunds(txns);
+  return txns.map((t) => ({
+    ...t,
+    description: describe(t),
+    projectLabel: projectLabelFor(funds, t),
+  }));
+}
+
+export default {
+  buildStatement,
+  savingsDelta,
+  purposeLegs,
+  describe,
+  projectLabelFor,
+  loadProjectFunds,
+  withDescriptions,
+};

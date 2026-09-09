@@ -41,7 +41,7 @@ import {
   handleFailedTransaction,
 } from "../services/settlement.service.js";
 import { priceContribution, pricePayout } from "../services/pricing.service.js";
-import { buildStatement } from "../services/statement.service.js";
+import { buildStatement, withDescriptions } from "../services/statement.service.js";
 import { config } from "../config/index.js";
 
 const router = express.Router();
@@ -534,7 +534,7 @@ router.get(
       .sort({ date: -1 })
       .limit(200)
       .lean();
-    res.json({ transactions });
+    res.json({ transactions: await withDescriptions(transactions) });
   })
 );
 
@@ -558,7 +558,7 @@ router.get(
       .sort({ date: -1 })
       .limit(500)
       .lean();
-    res.json({ transactions });
+    res.json({ transactions: await withDescriptions(transactions) });
   })
 );
 
