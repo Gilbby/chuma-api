@@ -248,6 +248,114 @@ router.post(
 );
 
 /**
+ * PATCH /api/groups/:id/projects/:projectId  (auth, Chairperson) — edit a
+ * savings project. Body: { name?, targetAmount?, deadline? }
+ *
+ * The same three fields the project was created with, and nothing else:
+ * `collected` is settled money and `status` follows the group's activity, so
+ * neither is editable here. A field left out of the body is left alone;
+ * sending `targetAmount: null` / `deadline: null` clears it back to "no goal
+ * set" / "collect for as long as it takes".
+ */
+router.patch(
+  "/:id/projects/:projectId",
+  requireAuth,
+  requireGroupAdmin("id"),
+  asyncHandler(async (req, res) => {
+    const group = req.group;
+
+    if (!isProjectFundGroup(group))
+      return res
+        .status(400)
+        .json({ error: "This group type does not use savings projects" });
+    if (req.member.role !== "Chairperson")
+      return res
+        .status(403)
+        .json({ error: "Only the Chairperson can edit a project" });
+
+    const project = group.projects.id(req.params.projectId);
+    if (!project) return res.status(404).json({ error: "Project not found" });
+    if (project.status === "archived")
+      return res
+        .status(400)
+        .json({ error: "This project is archived and can no longer be edited" });
+
+    const body = req.body ?? {};
+    const before = { name: project.name, targetAmount: project.targetAmount ?? null };
+
+    if (body.name !== undefined) {
+      const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
+      if (!name) return res.status(400).json({ error: "Project name is required" });
+
+      // Same rule as adding one: names are how members pick a project when
+      // they give, so no two live projects may read the same.
+      const clash = group.projects.some(
+        (p) =>
+          String(p._id) !== String(project._id) &&
+          p.status !== "archived" &&
+          p.name.trim().toLowerCase() === name.toLowerCase()
+      );
+      if (clash)
+        return res
+          .status(409)
+          .json({ error: "A project with that name already exists" });
+
+      project.name = name;
+    }
+
+    if (body.targetAmount !== undefined) {
+      if (body.targetAmount === null || body.targetAmount === "") {
+        project.targetAmount = null;
+      } else {
+        const target = Number(body.targetAmount);
+        if (!Number.isFinite(target) || target <= 0)
+          return res
+            .status(400)
+            .json({ error: "Goal must be more than 0, or leave it blank" });
+        project.targetAmount = target;
+      }
+    }
+
+    if (body.deadline !== undefined) {
+      if (body.deadline === null || body.deadline === "") {
+        project.deadline = null;
+      } else {
+        const deadline = new Date(body.deadline);
+        if (Number.isNaN(deadline.getTime()))
+          return res.status(400).json({ error: "That deadline is not a valid date" });
+        project.deadline = deadline;
+      }
+    }
+
+    await group.save();
+
+    // Members give toward these by name and goal, so a change to either is
+    // worth telling them about. A deadline-only edit is quiet housekeeping.
+    const renamed = before.name !== project.name;
+    const goalChanged = before.targetAmount !== (project.targetAmount ?? null);
+    if (renamed || goalChanged) {
+      await notifyAll(
+        group.members
+          .filter((m) => m.status === "active" && String(m.userId) !== String(req.userId))
+          .map((m) => m.userId)
+          .filter(Boolean),
+        {
+          type: "governance",
+          title: "A project was updated",
+          body: renamed
+            ? `"${before.name}" is now "${project.name}" in ${group.name}.`
+            : `The goal for "${project.name}" in ${group.name} has changed.`,
+          groupId: group._id,
+          groupName: group.name,
+        }
+      );
+    }
+
+    res.json({ project });
+  })
+);
+
+/**
  * POST /api/groups  (auth) — create a group.
  * Charges month 1 of the monthly fee (K100) via PawaPay deposit from the
  * creator's wallet. Group goes live once payment is ACCEPTED.
@@ -1128,6 +1236,15 @@ router.post(
 
     if (group.status === "closed")
       return res.status(400).json({ error: "This group is already closed" });
+
+    // A church group is closing what the congregation gives toward, so only
+    // its Chairperson may start that — the app hides the control from the
+    // other admins, and this refuses them if they ask anyway. Every other
+    // group type keeps the any-admin-proposes-and-the-rest-vote rule.
+    if (isProjectFundGroup(group) && req.member.role !== "Chairperson")
+      return res
+        .status(403)
+        .json({ error: "Only the Chairperson can delete this group" });
 
     const openLoans = await Loan.countDocuments({
       groupId: group._id,
