@@ -11,6 +11,7 @@ import {
   requireGroupMember,
   requireGroupAdmin,
   isGroupAdmin,
+  ADMIN_ROLES,
 } from "../middleware/groupAuth.js";
 import { paymentLimiter } from "../middleware/rateLimits.js";
 import { generateReceiptId } from "../utils/helpers.js";
@@ -563,11 +564,16 @@ router.get(
 );
 
 /**
- * GET /api/statement?groupId=&from=&to=  (auth)
- * Bank-style account statement for the caller: opening/closing savings balance
- * with a running ledger, plus all other activity in the period. `from`/`to` are
- * ISO dates; they default to the current calendar month. `groupId` is optional
- * — omitted, the statement spans every group the caller belongs to.
+ * GET /api/statement?groupId=&from=&to=&scope=  (auth)
+ * Bank-style account statement: opening/closing savings balance with a running
+ * ledger, plus all other activity in the period. `from`/`to` are ISO dates;
+ * they default to the current calendar month.
+ *
+ * `scope=member` (default) is the caller's own account; `groupId` narrows it
+ * to one group, and omitted it spans every group they belong to.
+ * `scope=group` is the whole group's book — every member's movements in it —
+ * which needs a `groupId` and a Chairperson / Treasurer / Secretary role in
+ * that group.
  */
 router.get(
   "/statement",
@@ -584,6 +590,15 @@ router.get(
       return res.status(400).json({ error: "from must be before to" });
 
     const { groupId } = req.query;
+    // "group" is the officer view: the whole group's book rather than the
+    // caller's own account. It needs a group to be about, and a role that is
+    // entitled to see what every other member paid.
+    const scope = req.query.scope === "group" ? "group" : "member";
+    if (scope === "group" && !groupId)
+      return res
+        .status(400)
+        .json({ error: "A group statement needs a groupId" });
+
     if (groupId) {
       if (!mongoose.isValidObjectId(groupId))
         return res.status(400).json({ error: "Valid groupId required" });
@@ -594,6 +609,11 @@ router.get(
       );
       if (!member)
         return res.status(403).json({ error: "Not a member of this group" });
+      if (scope === "group" && !ADMIN_ROLES.includes(member.role))
+        return res.status(403).json({
+          error:
+            "Only the Chairperson, Treasurer or Secretary can pull the group statement",
+        });
     }
 
     const statement = await buildStatement({
@@ -601,6 +621,7 @@ router.get(
       groupId: groupId || null,
       from,
       to,
+      scope,
     });
     res.json({ statement });
   })

@@ -134,7 +134,14 @@ export function purposeLegs(txn) {
   }
 }
 
-export function describe(txn) {
+/**
+ * What one movement is called.
+ *
+ * `forGroup` is the officer's book, where every row belongs to a different
+ * person — so the one label written in the second person ("disbursed to you")
+ * has to drop it. The row already names who it was.
+ */
+export function describe(txn, { forGroup = false } = {}) {
   switch (txn.type) {
     case "contribution":
       return txn.contributionType === "topup"
@@ -145,7 +152,7 @@ export function describe(txn) {
     case "share-out":
       return "Cycle share-out — savings paid out";
     case "loan":
-      return "Loan disbursed to you";
+      return forGroup ? "Loan disbursed" : "Loan disbursed to you";
     case "repayment":
       return "Loan repayment";
     case "penalty":
@@ -282,19 +289,41 @@ function buildProjectGiving(txns, funds) {
 }
 
 /**
- * Build a statement for `memberId` over [from, to], optionally scoped to one
- * group. `to` is inclusive of the whole day the caller passed.
+ * Build a statement over [from, to].
+ *
+ * `scope` decides WHOSE money it is:
+ *
+ *   "member" (default) — the caller's own account, optionally narrowed to
+ *                        one group. This is the statement every member can
+ *                        pull.
+ *   "group"            — the whole group's book: every member's movements in
+ *                        that group, so the balance is the group's pooled
+ *                        savings rather than one person's stake. Needs a
+ *                        groupId, and the route only lets an officer ask for
+ *                        it — a member reading what everyone else paid is a
+ *                        different product, and not this one.
+ *
+ * Nothing else changes between the two: the same ledger, the same breakdown,
+ * the same project rows, built from the same transactions. A treasurer
+ * reconciling the group and a member checking their own stake should be
+ * reading the same document, or the two will not agree.
+ *
+ * `to` is inclusive of the whole day the caller passed.
  */
-export async function buildStatement({ user, groupId, from, to }) {
+export async function buildStatement({ user, groupId, from, to, scope = "member" }) {
   const memberId = user._id;
-  const scope = groupId ? { groupId } : {};
+  const forGroup = scope === "group";
+  // A group statement is every member's movements in that group; a member
+  // statement is one person's, narrowed to a group only if asked.
+  const who = forGroup
+    ? { groupId }
+    : { memberId, ...(groupId ? { groupId } : {}) };
 
   // Opening balance: every settled savings movement BEFORE the period. Only
   // the three savings-affecting types can contribute, so don't drag the rest
   // of the ledger out of Mongo to add zeroes.
   const priorTxns = await Transaction.find({
-    memberId,
-    ...scope,
+    ...who,
     status: "completed",
     type: { $in: ["contribution", "combined", "share-out"] },
     date: { $lt: from },
@@ -305,8 +334,7 @@ export async function buildStatement({ user, groupId, from, to }) {
 
   // Everything inside the period, oldest first — a statement reads forwards.
   const txns = await Transaction.find({
-    memberId,
-    ...scope,
+    ...who,
     date: { $gte: from, $lte: to },
   })
     .sort({ date: 1 })
@@ -328,7 +356,17 @@ export async function buildStatement({ user, groupId, from, to }) {
   for (const t of txns) {
     const id = String(t._id);
     const signed = Number(t.amount) || 0;
-    const direction = signed >= 0 ? "in" : "out";
+    // `amount` is signed from the MEMBER's wallet: a contribution is money
+    // out of it, a loan is money in. A group's book is the mirror of that —
+    // the same contribution is money INTO the group, and the loan is money
+    // out of it to the member. Flip it, or an officer reads every payment
+    // their members made as the group losing money.
+    const memberSide = signed >= 0 ? "in" : "out";
+    const direction = forGroup
+      ? memberSide === "in"
+        ? "out"
+        : "in"
+      : memberSide;
     const abs = Math.abs(signed);
 
     const delta = savingsDelta(t);
@@ -341,7 +379,10 @@ export async function buildStatement({ user, groupId, from, to }) {
         date: t.date,
         type: t.type,
         groupName: t.groupName ?? "",
-        description: describe(t),
+        // Who paid. Only a group statement has more than one answer, so it is
+        // the only view that shows it.
+        memberName: forGroup ? t.memberName ?? "" : null,
+        description: describe(t, { forGroup }),
         projectLabel: projectLabelFor(funds, t),
         note: t.note ?? "",
         delta,
@@ -356,7 +397,8 @@ export async function buildStatement({ user, groupId, from, to }) {
       date: t.date,
       type: t.type,
       groupName: t.groupName ?? "",
-      description: describe(t),
+      memberName: forGroup ? t.memberName ?? "" : null,
+      description: describe(t, { forGroup }),
       projectLabel: projectLabelFor(funds, t),
       note: t.note ?? "",
       amount: abs,
@@ -440,7 +482,10 @@ export async function buildStatement({ user, groupId, from, to }) {
     statementId: generateReceiptId("STM"),
     generatedAt: new Date(),
     period: { from, to },
+    // On a group statement this is who PULLED it, not whose money it is. The
+    // client and the PDF label it accordingly.
     member: { name: user.name, phone: user.phone },
+    scope: forGroup ? "group" : "member",
     group,
     openingBalance,
     closingBalance: balance,
