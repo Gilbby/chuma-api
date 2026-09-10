@@ -38,6 +38,33 @@ export function savingsDelta(txn) {
   }
 }
 
+/**
+ * Which way a movement runs on the GROUP's book.
+ *
+ * `amount` is signed from the MEMBER's wallet, and for most types the group's
+ * book is its mirror — a contribution leaves the member and lands in the pool,
+ * a loan leaves the pool and lands with the member.
+ *
+ * A fee is the one the mirror gets wrong. The member pays it, so it is money
+ * out of their wallet, but it goes to Chuma rather than into the pool: on the
+ * group's book it is money leaving, not arriving. Mirroring it would show a
+ * registration fee as group income.
+ *
+ * So this is stated per type rather than derived. Every type in the
+ * Transaction enum is listed: "in" is a member paying the pool, "out" is the
+ * pool paying someone — a member, or Chuma.
+ */
+const GROUP_DIRECTION = {
+  contribution: "in",
+  combined: "in",
+  repayment: "in",
+  penalty: "in",
+  loan: "out",
+  "share-out": "out",
+  withdrawal: "out",
+  fee: "out",
+};
+
 /** What each leg of a payment is called on the statement. */
 const PURPOSE_LABELS = {
   contribution: "Savings contributions",
@@ -356,16 +383,13 @@ export async function buildStatement({ user, groupId, from, to, scope = "member"
   for (const t of txns) {
     const id = String(t._id);
     const signed = Number(t.amount) || 0;
-    // `amount` is signed from the MEMBER's wallet: a contribution is money
-    // out of it, a loan is money in. A group's book is the mirror of that —
-    // the same contribution is money INTO the group, and the loan is money
-    // out of it to the member. Flip it, or an officer reads every payment
-    // their members made as the group losing money.
+    // A member's own statement reads off their wallet; the group's book reads
+    // off the pool, which is a different question with a different answer for
+    // every row — see GROUP_DIRECTION. The mirror is the fallback for a type
+    // added to the model but not yet to that table.
     const memberSide = signed >= 0 ? "in" : "out";
     const direction = forGroup
-      ? memberSide === "in"
-        ? "out"
-        : "in"
+      ? GROUP_DIRECTION[t.type] ?? (memberSide === "in" ? "out" : "in")
       : memberSide;
     const abs = Math.abs(signed);
 
