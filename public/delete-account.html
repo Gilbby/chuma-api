@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="index, follow" />
+  <title>Delete Your Account — Chuma</title>
+  <meta name="description" content="How to delete your Chuma account and personal data, in the app or by request." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --primary: #0A5C36; --accent: #10B981; --bg: #F9FAF9; --surface: #FFFFFF;
+      --text: #1F2937; --heading: #064E3B; --muted: #6B7280; --border: #E5E7EB; --soft: #E6F4ED;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --primary: #10B981; --accent: #34D399; --bg: #050A07; --surface: #0C1410;
+        --text: #E5E7EB; --heading: #F9FAF9; --muted: #A3A3A3; --border: #1E3328; --soft: #0F2A20;
+      }
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.65; font-size: 16px; }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 32px 20px 64px; }
+    header.site { display: flex; align-items: center; gap: 12px; padding-bottom: 24px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .logo { width: 40px; height: 40px; border-radius: 12px; background: var(--primary); color: #fff; display: flex; align-items: center; justify-content: center; font-family: "Plus Jakarta Sans", sans-serif; font-weight: 800; font-size: 20px; }
+    .brand { font-family: "Plus Jakarta Sans", sans-serif; font-weight: 700; font-size: 20px; color: var(--heading); }
+    h1 { font-family: "Plus Jakarta Sans", sans-serif; font-weight: 800; font-size: 30px; color: var(--heading); letter-spacing: -0.5px; margin: 28px 0 6px; }
+    h2 { font-family: "Plus Jakarta Sans", sans-serif; font-weight: 700; font-size: 20px; color: var(--heading); margin: 34px 0 10px; letter-spacing: -0.3px; }
+    p, li { color: var(--text); }
+    a { color: var(--primary); text-decoration: none; font-weight: 600; }
+    a:hover { text-decoration: underline; }
+    .updated { color: var(--muted); font-size: 14px; margin: 0 0 8px; }
+    .lead { font-size: 17px; }
+    ol, ul { padding-left: 22px; }
+    li { margin: 8px 0; }
+    .steps { counter-reset: step; list-style: none; padding-left: 0; }
+    .steps li { position: relative; padding-left: 44px; margin: 14px 0; }
+    .steps li::before {
+      counter-increment: step; content: counter(step);
+      position: absolute; left: 0; top: 0;
+      width: 30px; height: 30px; border-radius: 50%;
+      background: var(--primary); color: #fff;
+      font-family: "Plus Jakarta Sans", sans-serif; font-weight: 700; font-size: 15px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .cta {
+      display: inline-block; margin: 8px 0 4px;
+      background: var(--primary); color: #fff; font-weight: 700;
+      padding: 14px 22px; border-radius: 14px; text-decoration: none;
+    }
+    .cta:hover { text-decoration: none; opacity: 0.92; }
+    .callout { background: var(--soft); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; margin: 20px 0; }
+    .callout strong { color: var(--heading); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px 22px; margin: 18px 0; }
+    footer.site { margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); color: var(--muted); font-size: 14px; }
+    footer.site a { margin-right: 16px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="site">
+      <div class="logo">C</div>
+      <div class="brand">Chuma</div>
+    </header>
+
+    <h1>Delete your account</h1>
+    <p class="updated">Last updated: 18 September 2026</p>
+
+    <p class="lead">
+      You can permanently delete your Chuma account and personal data at any time. This page explains how
+      to do it inside the app, and how to request deletion if you no longer have the app installed.
+    </p>
+
+    <h2>Option 1 — Delete in the app (fastest)</h2>
+    <ol class="steps">
+      <li>Open the Chuma app and sign in.</li>
+      <li>Go to the <strong>Profile</strong> tab.</li>
+      <li>Scroll to <strong>Legal</strong> and tap <strong>Delete account</strong>.</li>
+      <li>Type <strong>DELETE</strong> to confirm, then tap <strong>Delete my account</strong>.</li>
+    </ol>
+    <p>Your account is removed immediately and you are signed out.</p>
+
+    <h2>Option 2 — Request deletion by email</h2>
+    <p>
+      If you can't use the app, email us from the phone number or email associated with your account and
+      we will delete it for you. Please include enough detail to verify your identity (your registered
+      mobile number and full name).
+    </p>
+    <p>
+      <a class="cta" href="mailto:contact@bristalite.com?subject=Account%20deletion%20request&body=Please%20delete%20my%20Chuma%20account.%0A%0ARegistered%20mobile%20number%3A%20%0AFull%20name%3A%20%0A">Email a deletion request</a>
+    </p>
+    <p style="color: var(--muted); font-size: 14px;">
+      Or write to <a href="mailto:contact@bristalite.com">contact@bristalite.com</a>. We aim to complete verified
+      requests within 30 days.
+    </p>
+
+    <h2>What gets deleted</h2>
+    <ul>
+      <li>Your profile and login (name, phone number, profile photo, app PIN).</li>
+      <li>Your identity verification (KYC) details, including ID number and date of birth.</li>
+      <li>Your payment details (payout method and account number).</li>
+      <li>Your notifications and one-time sign-in codes.</li>
+    </ul>
+
+    <h2>What may be kept</h2>
+    <p>
+      To keep each savings group's own books complete and accurate after you leave, a group's historical
+      records may retain <strong>only your name</strong> against past contributions, loans, and repayments.
+      These records no longer link back to you (your phone number and account are removed) and are retained
+      for the group's own audit and legal purposes.
+    </p>
+
+    <div class="callout">
+      <strong>Please settle up first.</strong> Because Chuma holds money on members' behalf, we can't delete
+      your account while it still has money or responsibilities attached — for example an <strong>active
+      loan you still owe</strong>, <strong>savings you still hold in a group</strong>, or being the
+      <strong>sole chairperson</strong> of a group other members depend on. The app will tell you exactly
+      what to resolve first (repay the loan, leave the group to be refunded, or hand over the chairperson
+      role). Once those are settled, deletion goes through.
+    </div>
+
+    <footer class="site">
+      <a href="/privacy">Privacy Policy</a>
+      <a href="/terms">Terms of Service</a>
+      <a href="/delete-account">Delete Account</a>
+      <p>&copy; 2026 Chuma. All rights reserved.</p>
+    </footer>
+  </div>
+</body>
+</html>

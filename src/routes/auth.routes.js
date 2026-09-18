@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
 import { Otp } from "../models/Otp.js";
 import { Group } from "../models/Group.js";
+import { Loan } from "../models/Loan.js";
 import { Notification } from "../models/Notification.js";
 import { asyncHandler } from "../middleware/error.js";
 import { requireAuth, signToken, hasRealName } from "../middleware/auth.js";
@@ -468,6 +469,120 @@ router.patch(
     }
     await req.user.save();
     res.json({ message: "Profile updated", user: sanitizeUser(req.user) });
+  })
+);
+
+/**
+ * DELETE /api/auth/account  (auth)
+ *
+ * Permanent account deletion — required by the Google Play "Data deletion" and
+ * Apple 5.1.1(v) policies for any app that lets you create an account. This is
+ * the in-app path; a public web request form should point at the same outcome.
+ *
+ * Money first: an account can't be deleted while it still holds savings, owes a
+ * loan, or is the sole chairperson keeping a live group running — deleting then
+ * would strand a member's money or leave a group headless. Those cases return
+ * 409 { code: "has_obligations", blockers } so the app can tell the user exactly
+ * what to settle. Both stores permit gating deletion on this, provided the
+ * reason is shown (it is).
+ *
+ * When nothing blocks it: personal data (the User doc — phone, KYC identity,
+ * NRC/DOB, payment details — plus notifications and OTPs) is deleted, and the
+ * user is severed from every group member row. Completed ledger entries
+ * (Transaction/Loan) are retained for audit/records with only a name snapshot,
+ * carrying no live link back to the deleted person.
+ */
+router.delete(
+  "/account",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const userId = req.user._id;
+    const blockers = [];
+
+    // Outstanding loans anywhere → must be repaid (or cleared on group exit).
+    const openLoans = await Loan.find({
+      memberId: userId,
+      status: { $in: ["active", "overdue"] },
+    }).select("groupName outstanding");
+    for (const l of openLoans) {
+      blockers.push({
+        type: "loan",
+        groupName: l.groupName || "a group",
+        message: `Outstanding loan of K${l.outstanding ?? 0} in ${l.groupName || "a group"}. Repay it first.`,
+      });
+    }
+
+    // Live membership that still holds their money, or a chair others depend on.
+    const groups = await Group.find({
+      "members.userId": userId,
+      status: { $ne: "closed" },
+    });
+    for (const g of groups) {
+      const me = g.members.find(
+        (m) => String(m.userId) === String(userId) && m.status !== "removed"
+      );
+      if (!me) continue;
+
+      if ((me.savings || 0) > 0) {
+        blockers.push({
+          type: "savings",
+          groupName: g.name,
+          message: `K${me.savings} in savings still held in ${g.name}. Leave the group to be refunded first.`,
+        });
+      }
+
+      const isChair =
+        String(g.governance?.chairpersonUserId || "") === String(userId) ||
+        me.role === "Chairperson";
+      const otherActive = g.members.filter(
+        (m) => String(m.userId) !== String(userId) && m.status === "active"
+      ).length;
+      if (isChair && otherActive > 0 && g.status !== "pending-payment") {
+        blockers.push({
+          type: "chair",
+          groupName: g.name,
+          message: `You are the chairperson of ${g.name}. Hand the role to another admin or close the group first.`,
+        });
+      }
+    }
+
+    if (blockers.length) {
+      return res.status(409).json({
+        error: "Settle your group obligations before deleting your account.",
+        code: "has_obligations",
+        blockers,
+      });
+    }
+
+    // Cleared to delete. Drop unaccepted invites outright (just an unclaimed
+    // phone + name), then sever the personal link on every remaining member row
+    // — the name snapshot stays as history, the userId/phone do not.
+    await Group.updateMany(
+      { members: { $elemMatch: { userId, status: "pending" } } },
+      { $pull: { members: { userId, status: "pending" } } }
+    );
+    await Group.updateMany(
+      { "members.userId": userId },
+      {
+        $set: {
+          "members.$[m].userId": null,
+          "members.$[m].phone": null,
+          "members.$[m].status": "removed",
+        },
+      },
+      { arrayFilters: [{ "m.userId": userId }] }
+    );
+    // Don't leave a governance pointer to a person who no longer exists.
+    await Group.updateMany(
+      { "governance.chairpersonUserId": userId },
+      { $set: { "governance.chairpersonUserId": null } }
+    );
+
+    await Notification.deleteMany({ userId });
+    await Otp.deleteMany({ phone: req.user.phone });
+    await User.deleteOne({ _id: userId });
+
+    res.json({ message: "Account deleted" });
   })
 );
 

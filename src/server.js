@@ -5,6 +5,10 @@ import compression from "compression";
 import morgan from "morgan";
 import mongoSanitize from "express-mongo-sanitize";
 import cron from "node-cron";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 import config from "./config/index.js";
 import { connectDB } from "./config/db.js";
@@ -104,6 +108,13 @@ app.use("/api/approvals", approvalRoutes);
 app.use("/api/shareout", shareoutRoutes);
 app.use("/api", miscRoutes); // penalties, notifications, transactions, reports
 app.use("/api/webhooks", webhookRoutes);
+
+// Public legal pages (Privacy Policy, Terms, and the account-deletion page the
+// app stores require). Served as plain HTML from ../public with the `.html`
+// extension implied, so the clean URLs /privacy, /terms and /delete-account
+// resolve — these match LEGAL_URLS in the app. Mounted after the API routes
+// and before the JSON 404 so a missing file still falls through to notFound.
+app.use(express.static(path.join(__dirname, "../public"), { extensions: ["html"] }));
 
 // 404 + errors
 app.use(notFound);
