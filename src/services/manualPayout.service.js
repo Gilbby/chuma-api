@@ -1,5 +1,5 @@
 /**
- * Manual payouts — a payout the GROUP settles itself, outside the platform.
+ * Manual payouts - a payout the GROUP settles itself, outside the platform.
  *
  * "Manual" is not "cash". The treasurer might count out notes, send the member
  * mobile money from their own phone, or make a bank transfer; what they all
@@ -29,7 +29,7 @@ const labelFor = (txn) => LABELS[txn.type] || "payout";
 
 /**
  * True when this transaction is waiting on a person rather than on pawaPay.
- * Anything with transfers in flight belongs to the webhook — confirming it by
+ * Anything with transfers in flight belongs to the webhook - confirming it by
  * hand would settle a payout the provider has not actually made.
  */
 export function awaitsConfirmation(txn) {
@@ -52,7 +52,7 @@ export function awaitsConfirmation(txn) {
  * decline: an unpaid payout is simply one nobody has confirmed yet, which is
  * exactly what pending already says.
  *
- * `paymentMethod` is optional — how the group chose to move the money. It is
+ * `paymentMethod` is optional - how the group chose to move the money. It is
  * recorded on the transaction for the ledger, and changes nothing else.
  *
  * Returns { transaction } on success, or { error, status } to hand back.
@@ -71,7 +71,7 @@ export async function confirmManualPayout({ txn, admin, paymentMethod }) {
     { _id: txn._id, status: "pending" },
     {
       status: "completed",
-      note: `${txn.note} — paid by ${admin.name}`,
+      note: `${txn.note} - paid by ${admin.name}`,
       ...(paymentMethod ? { paymentMethod } : {}),
       "meta.confirmedBy": admin.userId,
       "meta.confirmedByName": admin.name,

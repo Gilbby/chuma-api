@@ -29,7 +29,7 @@ const approvalSchema = new Schema(
         "share-out",
         // An admin acknowledging that cash physically reached them. Unlike the
         // rest of this list it is a receipt, not a group decision, so it needs
-        // ONE admin rather than a quorum — but it moves real money into a
+        // ONE admin rather than a quorum - but it moves real money into a
         // member's savings, so it belongs in the same audited place.
         "cash-receipt",
       ],
@@ -46,7 +46,7 @@ const approvalSchema = new Schema(
     refId: { type: Schema.Types.ObjectId },
 
     // cash-receipt only: whose job this receipt is. The treasurer keeps the
-    // cash box, so it is theirs — and only when the group has no treasurer
+    // cash box, so it is theirs - and only when the group has no treasurer
     // does it fall to the chairperson. Stored when the receipt is raised so a
     // screen can name the right person without re-reading the roster, and so
     // the history stays truthful after roles change. Any admin may still
@@ -54,17 +54,17 @@ const approvalSchema = new Schema(
     confirmerRole: { type: String, enum: ["Treasurer", "Chairperson"] },
 
     // Who a "member-removal" is about. They may hold an admin role themselves,
-    // and nobody votes on their own removal — the vote route reads this to keep
+    // and nobody votes on their own removal - the vote route reads this to keep
     // them out of the quorum that decides it.
     targetUserId: { type: Schema.Types.ObjectId, ref: "User" },
     targetName: { type: String },
 
     // How a share-out approval will pay members, chosen when it is proposed
     // and fixed for that whole run. Voters are approving a method as much as an
-    // amount: "manual" commits the group to paying every member themselves —
-    // notes, their own mobile money, a bank transfer — and confirming each one
+    // amount: "manual" commits the group to paying every member themselves -
+    // notes, their own mobile money, a bank transfer - and confirming each one
     // in the app; "mobile-money" is one approval and then pawaPay does the
-    // rest. The mobile money hold overrides it either way — see paymentHold.js.
+    // rest. The mobile money hold overrides it either way - see paymentHold.js.
     payoutMethod: {
       type: String,
       enum: ["manual", "mobile-money"],

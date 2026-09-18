@@ -1,5 +1,5 @@
 /**
- * Cash receipts — an admin acknowledging that physical money reached them.
+ * Cash receipts - an admin acknowledging that physical money reached them.
  *
  * A cash payment cannot settle itself: there is no webhook, only a person
  * saying "yes, I have the notes in my hand". Until they say so the transaction
@@ -8,12 +8,12 @@
  * That acknowledgement is an approval, so it is recorded as one: it moves real
  * money into someone's savings on one admin's word, and the group is entitled
  * to see who said it and when, in the same place it sees loans and removals.
- * It differs from the rest only in the bar — ONE admin, not a quorum, because
+ * It differs from the rest only in the bar - ONE admin, not a quorum, because
  * the person holding the cash is the one who knows.
  *
  * The one admin is the treasurer, who keeps the cash box, and the chairperson
- * only in a group that has no treasurer. Any admin may still answer a receipt —
- * a treasurer on a bus must not freeze the group's savings — but the duty is
+ * only in a group that has no treasurer. Any admin may still answer a receipt -
+ * a treasurer on a bus must not freeze the group's savings - but the duty is
  * named, and the chairperson is told by SMS whenever cash is confirmed, so the
  * handover is witnessed by someone other than the person holding the notes.
  *
@@ -50,7 +50,7 @@ const labelFor = (txn) => LABELS[txn.type] || "payment";
  * Raise the receipt for a pending cash transaction: one approval for the group's
  * record, plus a notification to whoever should be holding the money.
  *
- * The treasurer is asked first — they keep the cash box — and the chairperson
+ * The treasurer is asked first - they keep the cash box - and the chairperson
  * only when the group has no treasurer. Any admin may answer it, though: the
  * approval is what governs that, and a group whose treasurer is unreachable
  * must not have its members' savings frozen.
@@ -61,7 +61,7 @@ export async function raiseCashReceipt({ group, txn, payerName }) {
 
   const active = group.members.filter((m) => m.status === "active" && m.userId);
   const treasurers = active.filter((m) => m.role === "Treasurer");
-  // Whose duty this is. Treasurer by default — they keep the cash box — and
+  // Whose duty this is. Treasurer by default - they keep the cash box - and
   // the chairperson only as the fallback for a group that has no treasurer.
   const confirmerRole = treasurers.length ? "Treasurer" : "Chairperson";
   const recipients = treasurers.length
@@ -72,7 +72,7 @@ export async function raiseCashReceipt({ group, txn, payerName }) {
     groupId: group._id,
     groupName: group.name,
     type: "cash-receipt",
-    title: `Cash ${label} — ${payerName}`,
+    title: `Cash ${label} - ${payerName}`,
     description: `${payerName} says they handed over K${amount} in cash. Approve once you have the money.`,
     amount,
     requestedById: txn.memberId,
@@ -90,7 +90,7 @@ export async function raiseCashReceipt({ group, txn, payerName }) {
     recipients.map((m) => m.userId),
     {
       type: "contribution",
-      title: `Cash ${label} — confirm receipt`,
+      title: `Cash ${label} - confirm receipt`,
       body: `${payerName} recorded a K${amount} cash ${label} to ${group.name}. Confirm you received the cash to credit it.`,
       groupId: group._id,
       groupName: group.name,
@@ -117,13 +117,13 @@ export async function resolveCashReceipt({ txn, admin, received }) {
     received
       ? {
           status: "completed",
-          note: `${txn.note} — cash received by ${admin.name}`,
+          note: `${txn.note} - cash received by ${admin.name}`,
           "meta.cashConfirmedBy": admin.userId,
           "meta.cashConfirmedByName": admin.name,
         }
       : {
           status: "failed",
-          note: `${txn.note} — cash not received (declined by ${admin.name})`,
+          note: `${txn.note} - cash not received (declined by ${admin.name})`,
           "meta.cashConfirmedBy": admin.userId,
           "meta.cashConfirmedByName": admin.name,
         },
@@ -138,7 +138,7 @@ export async function resolveCashReceipt({ txn, admin, received }) {
   // their job. Handing over notes is the one movement of group money nobody
   // else witnesses: the member gives, the treasurer confirms, and without this
   // the chairperson learns of it only if they go looking. They are excluded
-  // when they are the one who confirmed, or the one who paid — they already
+  // when they are the one who confirmed, or the one who paid - they already
   // know, and an SMS costs credit.
   if (received) {
     const group = await Group.findById(updated.groupId)
@@ -191,7 +191,7 @@ export async function resolveCashReceipt({ txn, admin, received }) {
     );
   }
 
-  // Tell the payer either way — a declined receipt is the more urgent of the
+  // Tell the payer either way - a declined receipt is the more urgent of the
   // two, since their money is somewhere and their savings are not.
   if (updated.memberId && String(updated.memberId) !== String(admin.userId)) {
     const label = labelFor(updated);

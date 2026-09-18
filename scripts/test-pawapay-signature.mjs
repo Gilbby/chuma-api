@@ -86,7 +86,7 @@ async function signCallback(url, payload) {
 let failures = 0;
 function check(name, pass, detail) {
   const status = pass ? "PASS" : "FAIL";
-  console.log(`  [${status}] ${name}${detail ? ` — ${detail}` : ""}`);
+  console.log(`  [${status}] ${name}${detail ? ` - ${detail}` : ""}`);
   if (!pass) failures++;
 }
 

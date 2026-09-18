@@ -93,7 +93,7 @@ app.get("/api/health", (req, res) =>
 
 // Routes
 app.use("/api/auth", authRoutes);
-// NOTE: KYC is enforced at exactly ONE endpoint — POST /api/groups (group
+// NOTE: KYC is enforced at exactly ONE endpoint - POST /api/groups (group
 // creation), where the founder becomes the group's Chairperson and is charged
 // the registration fee. Nothing else applies `requireKyc`: signup never asks
 // for it, a Treasurer or Secretary is invited into their role and never
@@ -112,7 +112,7 @@ app.use("/api/webhooks", webhookRoutes);
 // Public legal pages (Privacy Policy, Terms, and the account-deletion page the
 // app stores require). Served as plain HTML from ../public with the `.html`
 // extension implied, so the clean URLs /privacy, /terms and /delete-account
-// resolve — these match LEGAL_URLS in the app. Mounted after the API routes
+// resolve - these match LEGAL_URLS in the app. Mounted after the API routes
 // and before the JSON 404 so a missing file still falls through to notFound.
 app.use(express.static(path.join(__dirname, "../public"), { extensions: ["html"] }));
 

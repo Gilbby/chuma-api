@@ -1,5 +1,5 @@
 /**
- * Route-level smoke test for the Didit KYC endpoints — the REAL handlers.
+ * Route-level smoke test for the Didit KYC endpoints - the REAL handlers.
  *
  *   npm run verify:didit-routes
  *
@@ -72,12 +72,12 @@ for (let i = 1; i <= 5 && !connected; i++) {
     await mongoose.connect(config.mongoUri, { dbName: "chuma", serverSelectionTimeoutMS: 30000 });
     connected = true;
   } catch (e) {
-    console.log(`mongo connect attempt ${i} failed: ${e.message} — retrying in 5s`);
+    console.log(`mongo connect attempt ${i} failed: ${e.message} - retrying in 5s`);
     await new Promise((r) => setTimeout(r, 5000));
   }
 }
 if (!connected) {
-  console.error("Could not reach Atlas — network problem. Re-run later.");
+  console.error("Could not reach Atlas - network problem. Re-run later.");
   process.exit(2);
 }
 const server = await new Promise((resolve) => {
@@ -210,6 +210,6 @@ if (failures.length === 0) {
   console.log(`PASS (${passed}/${total})`);
   process.exit(0);
 } else {
-  console.log(`FAIL (${passed}/${total}) — ${failures.length} failed`);
+  console.log(`FAIL (${passed}/${total}) - ${failures.length} failed`);
   process.exit(1);
 }

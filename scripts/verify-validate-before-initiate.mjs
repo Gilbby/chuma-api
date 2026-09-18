@@ -23,7 +23,7 @@ const GROUP_ID = "6a47ce19b993fc0dbfd4c379"; // TEST group
 const API = process.env.API_URL || "http://localhost:5054";
 const LOG_PATH = process.env.LOG_PATH;
 const TEST_NAME = "Validate First Test";
-const TEST_PHONE = "260971110001"; // Airtel prefix — valid provider mapping
+const TEST_PHONE = "260971110001"; // Airtel prefix - valid provider mapping
 
 if (!LOG_PATH) {
   console.error("LOG_PATH must point at the API instance's captured stdout");
@@ -40,12 +40,12 @@ for (let i = 1; i <= 5 && !connected; i++) {
     await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 30000 });
     connected = true;
   } catch (e) {
-    console.log(`mongo connect attempt ${i} failed: ${e.message} — retrying in 10s`);
+    console.log(`mongo connect attempt ${i} failed: ${e.message} - retrying in 10s`);
     await sleep(10000);
   }
 }
 if (!connected) {
-  console.error("Could not reach Atlas — network problem. Re-run later.");
+  console.error("Could not reach Atlas - network problem. Re-run later.");
   process.exit(2);
 }
 const db = mongoose.connection.db;
@@ -165,7 +165,7 @@ try {
   if (txnIds.length)
     await db.collection("notifications").deleteMany({ transactionId: { $in: txnIds } });
   await db.collection("notifications").deleteMany({ body: new RegExp(TEST_NAME) });
-  console.log("Cleanup done — synthetic user/member/txns/notifications removed, rollups reverted.");
+  console.log("Cleanup done - synthetic user/member/txns/notifications removed, rollups reverted.");
   await mongoose.disconnect();
 }
 

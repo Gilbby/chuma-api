@@ -1,5 +1,5 @@
 // Change a member's role inside a group. "Admin" in this system is not a role of
-// its own — it is any of Chairperson / Treasurer / Secretary (see
+// its own - it is any of Chairperson / Treasurer / Secretary (see
 // middleware/groupAuth.js ADMIN_ROLES), so promoting someone to admin means
 // giving them one of those three.
 //
@@ -122,7 +122,7 @@ async function main() {
   }
   if (picked.length > 1) {
     console.error(
-      `They belong to ${picked.length} groups — pass --group <groupId> to say which:\n` +
+      `They belong to ${picked.length} groups - pass --group <groupId> to say which:\n` +
         picked.map((g) => `  ${g._id}  ${g.name}`).join("\n")
     );
     process.exitCode = 1;
@@ -133,13 +133,13 @@ async function main() {
   const member = memberOf(group);
   const before = member.role;
   member.role = role;
-  // A pending invite can't hold an admin role in practice — activate on promote.
+  // A pending invite can't hold an admin role in practice - activate on promote.
   if (ADMIN_ROLES.includes(role) && member.status === "pending")
     member.status = "active";
   await group.save();
 
   console.log(
-    `✔ ${member.name} (${member.phone || "no phone"}) in "${group.name}" — role ${before} → ${role}` +
+    `✔ ${member.name} (${member.phone || "no phone"}) in "${group.name}" - role ${before} → ${role}` +
       (ADMIN_ROLES.includes(role) ? "  [group admin]" : "")
   );
 }

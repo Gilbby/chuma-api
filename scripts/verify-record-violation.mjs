@@ -14,7 +14,7 @@ import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
 
 const GROUP_ID = "6a47ce19b993fc0dbfd4c379";
-const USER_ID = "6a47cb8be9d07482567dfcc0"; // Gilbert — Chairperson of TEST
+const USER_ID = "6a47cb8be9d07482567dfcc0"; // Gilbert - Chairperson of TEST
 const API = "http://localhost:5000";
 const AMOUNT = 1;
 
@@ -25,12 +25,12 @@ for (let i = 1; i <= 5 && !connected; i++) {
     await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 30000 });
     connected = true;
   } catch (e) {
-    console.log(`mongo connect attempt ${i} failed: ${e.message} — retrying in 10s`);
+    console.log(`mongo connect attempt ${i} failed: ${e.message} - retrying in 10s`);
     await new Promise((r) => setTimeout(r, 10000));
   }
 }
 if (!connected) {
-  console.error("Could not reach Atlas — network problem. Re-run later.");
+  console.error("Could not reach Atlas - network problem. Re-run later.");
   process.exit(2);
 }
 const db = mongoose.connection.db;

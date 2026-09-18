@@ -40,8 +40,8 @@ const router = express.Router();
  * every reason they can't borrow at all.
  *
  * The limit alone is not eligibility. POST /loans refuses a request for four
- * further reasons — an unpaid group fee, lending switched off, no real name on
- * the account, an open loan already running — and none of them depend on the
+ * further reasons - an unpaid group fee, lending switched off, no real name on
+ * the account, an open loan already running - and none of them depend on the
  * amount typed. Reporting them only on submit let a member fill in the whole
  * form and reach the confirm step before being turned away, so they are
  * answered here, in the same order the POST applies them, and the app blocks
@@ -91,7 +91,7 @@ router.get(
 );
 
 /**
- * POST /api/loans  (auth) — request a loan.
+ * POST /api/loans  (auth) - request a loan.
  * Body: { groupId, amount, durationMonths, reason? }
  * Creates a pending loan + an approval vote routed to admins.
  */
@@ -130,7 +130,7 @@ router.post(
         error: "You already have an open loan in this group. Repay it first.",
       });
 
-    // The payout draws real money from the merchant float — never let a group
+    // The payout draws real money from the merchant float - never let a group
     // lend more than the cash it actually holds.
     if (amount > (group.walletBalance || 0))
       return res.status(400).json({
@@ -176,7 +176,7 @@ router.post(
       groupId,
       groupName: group.name,
       type: "loan",
-      title: `Loan request — ${req.user.name}`,
+      title: `Loan request - ${req.user.name}`,
       description: reason || `Loan of ${amount}`,
       amount,
       requestedById: req.userId,
@@ -209,7 +209,7 @@ router.post(
     // Preview what the borrower will actually RECEIVE at disbursement: all fees
     // (pawaPay % + e-levy + our 1%) are netted out of the principal; they still
     // repay the full loan (breakdown.totalRepay). pricePayout throws on a tiny
-    // loan where fees ≥ principal — surface that as `tooSmall`, not a 500.
+    // loan where fees ≥ principal - surface that as `tooSmall`, not a 500.
     let disbursement;
     try {
       const corr = providerFromPhone(req.user.phone || "");
@@ -237,7 +237,7 @@ router.post(
 );
 
 /**
- * POST /api/loans/:id/repay  (auth) — full or partial repayment.
+ * POST /api/loans/:id/repay  (auth) - full or partial repayment.
  * Collects from the member by PawaPay deposit, or records a cash repayment for
  * an admin to confirm (the only route while the mobile money hold is on).
  * Body: { amount, paymentMethod?, payerPhone? }
@@ -254,7 +254,7 @@ router.post(
       return res.status(400).json({ error: "Enter a valid amount" });
 
     const isCash = paymentMethod === "Cash";
-    // Mobile money is on hold for member money — repayments come in as cash.
+    // Mobile money is on hold for member money - repayments come in as cash.
     const held = rejectIfMobileMoneyHeld(paymentMethod);
     if (held) return res.status(held.status).json(held.body);
 
@@ -276,7 +276,7 @@ router.post(
     const phone = payerPhone || req.user.phone;
 
     // Validate the full transaction against the model BEFORE initiating the
-    // deposit — PawaPay must never move money for a request we would reject.
+    // deposit - PawaPay must never move money for a request we would reject.
     const txn = new Transaction({
       groupId: loan.groupId,
       groupName: loan.groupName,
@@ -294,7 +294,7 @@ router.post(
 
     // Cash: nothing is applied to the loan until an admin says the money
     // reached them. Same receipt flow as a cash contribution, so the group's
-    // record shows who confirmed it — see cashReceipt.service.js.
+    // record shows who confirmed it - see cashReceipt.service.js.
     if (isCash) {
       const group = await Group.findById(loan.groupId).lean();
       if (!group) return res.status(404).json({ error: "Group not found" });
@@ -323,7 +323,7 @@ router.post(
       return res.status(402).json({ error: "Payment rejected" });
 
     // Loan/group state is only mutated by the settlement service once the
-    // payment reaches COMPLETED — inline below for simulated payments.
+    // payment reaches COMPLETED - inline below for simulated payments.
     txn.pawapay = { depositId: deposit.id, status: deposit.status };
     if (deposit.simulated) txn.status = "completed";
     await txn.save();
@@ -339,7 +339,7 @@ router.post(
 );
 
 /**
- * GET /api/loans?groupId=...&mine=true  (auth) — loans for a group the caller
+ * GET /api/loans?groupId=...&mine=true  (auth) - loans for a group the caller
  * belongs to, or their own loans. Never a global listing.
  */
 router.get(

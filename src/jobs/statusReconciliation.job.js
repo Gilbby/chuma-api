@@ -24,13 +24,13 @@ import {
   applyPayoutChunkStatus,
 } from "../services/settlement.service.js";
 
-// Grace window: don't poll transactions initiated moments ago — their
+// Grace window: don't poll transactions initiated moments ago - their
 // callback may legitimately still be in flight.
 const RECONCILE_MIN_AGE_MS = 2 * 60 * 1000;
 // Stop polling transactions this old: PawaPay finalises within minutes, so a
 // week-old pending transaction is stuck data, not an in-flight payment.
 // Without a ceiling every stuck transaction is polled every 5 minutes forever
-// — unbounded PawaPay API traffic that only ever grows.
+// - unbounded PawaPay API traffic that only ever grows.
 const RECONCILE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // Cap PawaPay status polls per run so a backlog can't blow past the 5-minute
 // cron interval; the remainder is picked up on subsequent runs.
@@ -46,7 +46,7 @@ let sweepInProgress = false;
 
 export async function runStatusReconciliation() {
   if (sweepInProgress) {
-    console.warn("[statusReconciliation] previous sweep still running — skipped");
+    console.warn("[statusReconciliation] previous sweep still running - skipped");
     return null;
   }
   sweepInProgress = true;
@@ -70,10 +70,10 @@ async function sweep() {
     createdAt: { $lte: cutoff, $gte: maxAgeCutoff },
     $or: pawapayLinked,
   })
-    .sort({ createdAt: 1 }) // oldest first — closest to timing out of the window
+    .sort({ createdAt: 1 }) // oldest first - closest to timing out of the window
     .limit(RECONCILE_BATCH_LIMIT);
 
-  // Aged out of the polling window: surface loudly for manual review — these
+  // Aged out of the polling window: surface loudly for manual review - these
   // need a human (check the PawaPay dashboard / resend-callback), not a poll.
   const expired = await Transaction.countDocuments({
     status: "pending",
@@ -82,7 +82,7 @@ async function sweep() {
   });
   if (expired > 0) {
     console.error(
-      `[statusReconciliation] ${expired} pending transaction(s) older than 7 days — no longer polled, review manually`
+      `[statusReconciliation] ${expired} pending transaction(s) older than 7 days - no longer polled, review manually`
     );
   }
 
@@ -99,7 +99,7 @@ async function sweep() {
       const result = await checkDepositStatus(txn.pawapay.depositId);
       const status = result?.status;
       if (!FINAL_STATUSES.includes(status)) {
-        // ACCEPTED / SUBMITTED / PENDING / UNKNOWN — retry next run.
+        // ACCEPTED / SUBMITTED / PENDING / UNKNOWN - retry next run.
         counts.stillPending++;
         continue;
       }
@@ -140,10 +140,10 @@ async function sweep() {
     // the parent once all its transfers are final (same atomic guard). ───────
     const transfers = txn.pawapay?.transfers || [];
     for (const t of transfers) {
-      if (TRANSFER_FINAL.includes(t.status)) continue; // already final — skip
+      if (TRANSFER_FINAL.includes(t.status)) continue; // already final - skip
       const result = await checkPayoutStatus(t.payoutId);
       const status = result?.status;
-      if (!FINAL_STATUSES.includes(status)) continue; // still in flight — next run
+      if (!FINAL_STATUSES.includes(status)) continue; // still in flight - next run
       try {
         await applyPayoutChunkStatus(t.payoutId, status, result.failureReason);
       } catch (err) {

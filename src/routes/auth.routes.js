@@ -44,7 +44,7 @@ const PIN_LOCKOUT_MS = 15 * 60 * 1000;
 
 // Failed PIN attempts per user, in memory: a lockout only has to outlive a
 // guessing burst, and nothing here is worth a database write per attempt. A
-// process restart forgives the counter — an acceptable trade for a check that
+// process restart forgives the counter - an acceptable trade for a check that
 // already sits behind a valid session token.
 const pinAttempts = new Map();
 
@@ -89,7 +89,7 @@ router.post(
 
     const normalized = normalizePhone(phone);
 
-    // Reviewer demo number: skip SMS, throttle and stored OTP entirely — the
+    // Reviewer demo number: skip SMS, throttle and stored OTP entirely - the
     // fixed code is accepted directly in verify-otp. Return success so the app
     // advances to the code screen exactly as it would for a real number.
     if (isReviewPhone(normalized)) {
@@ -97,7 +97,7 @@ router.post(
     }
 
     // Signup is only for new numbers. If a fully set-up account (has a PIN)
-    // already exists, don't start the create-account flow — send them to sign in.
+    // already exists, don't start the create-account flow - send them to sign in.
     // Seeded/invited stubs (no PIN yet) are allowed to claim their number.
     if (mode === "signup") {
       const existing = await User.findOne({ phone: normalized });
@@ -224,22 +224,22 @@ router.post(
       user.pinResetAllowedUntil = pinResetAllowedUntil;
       await user.save();
       // Routing: everyone lands in the app. KYC is asked for at exactly one
-      // point — founding a group (POST /groups), where the founder becomes its
+      // point - founding a group (POST /groups), where the founder becomes its
       // Chairperson. Nobody is nudged for it here: Members, and the Treasurer
-      // and Secretary who are invited into their roles, never need it — they
+      // and Secretary who are invited into their roles, never need it - they
       // transact under requireRealName. Clear any nudge an older build left.
       await clearKycNudge(user._id);
       return res.json({
         token: signToken(user._id),
         user: sanitizeUser(user),
         // Accounts created before the name step exists still carry the signup
-        // stub. Ask once, on the way in — the same step, just late.
+        // stub. Ask once, on the way in - the same step, just late.
         next: hasRealName(user.name) ? "tabs" : "name",
       });
     }
 
     // signup: create a stub user if not present, return token to finish setup.
-    // Guard (defense in depth — request-otp already blocks this): a completed
+    // Guard (defense in depth - request-otp already blocks this): a completed
     // account (has a PIN) can't be re-created via signup; route them to sign in.
     if (user?.pinHash)
       return res.status(409).json({
@@ -264,7 +264,7 @@ router.post(
           );
           if (member) {
             // Targeted positional $set of only this member's userId (status stays
-            // "pending" — they still accept in-app). A full group.save() here would
+            // "pending" - they still accept in-app). A full group.save() here would
             // persist read-time values and clobber a concurrent settlement $inc.
             await Group.updateOne(
               {
@@ -436,7 +436,7 @@ router.post(
 /**
  * POST /api/auth/verify-pin  (auth)
  * Body: { pin }
- * Checks the app PIN without changing it — the client uses it to unlock
+ * Checks the app PIN without changing it - the client uses it to unlock
  * sensitive views (revealing a balance, confirming money actions). Kept
  * separate from POST /pin on purpose: verifying must never re-hash the PIN,
  * and it must not honour the post-OTP reset window, which would let a fresh
@@ -522,19 +522,19 @@ router.patch(
 /**
  * DELETE /api/auth/account  (auth)
  *
- * Permanent account deletion — required by the Google Play "Data deletion" and
+ * Permanent account deletion - required by the Google Play "Data deletion" and
  * Apple 5.1.1(v) policies for any app that lets you create an account. This is
  * the in-app path; a public web request form should point at the same outcome.
  *
  * Money first: an account can't be deleted while it still holds savings, owes a
- * loan, or is the sole chairperson keeping a live group running — deleting then
+ * loan, or is the sole chairperson keeping a live group running - deleting then
  * would strand a member's money or leave a group headless. Those cases return
  * 409 { code: "has_obligations", blockers } so the app can tell the user exactly
  * what to settle. Both stores permit gating deletion on this, provided the
  * reason is shown (it is).
  *
- * When nothing blocks it: personal data (the User doc — phone, KYC identity,
- * NRC/DOB, payment details — plus notifications and OTPs) is deleted, and the
+ * When nothing blocks it: personal data (the User doc - phone, KYC identity,
+ * NRC/DOB, payment details - plus notifications and OTPs) is deleted, and the
  * user is severed from every group member row. Completed ledger entries
  * (Transaction/Loan) are retained for audit/records with only a name snapshot,
  * carrying no live link back to the deleted person.
@@ -603,7 +603,7 @@ router.delete(
 
     // Cleared to delete. Drop unaccepted invites outright (just an unclaimed
     // phone + name), then sever the personal link on every remaining member row
-    // — the name snapshot stays as history, the userId/phone do not.
+    // - the name snapshot stays as history, the userId/phone do not.
     await Group.updateMany(
       { members: { $elemMatch: { userId, status: "pending" } } },
       { $pull: { members: { userId, status: "pending" } } }

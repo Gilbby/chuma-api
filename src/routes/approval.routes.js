@@ -26,16 +26,16 @@ import {
 
 const router = express.Router();
 
-// Everything that is no longer waiting on a vote — the approval history.
+// Everything that is no longer waiting on a vote - the approval history.
 const RESOLVED_STATUSES = ["approved", "rejected", "executed"];
 
 /**
- * GET /api/approvals?groupId=...&status=...&limit=...  (auth) — approvals
+ * GET /api/approvals?groupId=...&status=...&limit=...  (auth) - approvals
  * scoped to groups the caller belongs to (never a global listing).
  *
  * status: "pending" (default), "resolved" (the history: approved, rejected,
  * executed), "all", or one exact status. Pending stays the default because
- * most callers only want the work queue — history is opt-in.
+ * most callers only want the work queue - history is opt-in.
  */
 router.get(
   "/",
@@ -48,7 +48,7 @@ router.get(
     else if (["pending", ...RESOLVED_STATUSES].includes(wanted)) status = wanted;
     else return res.status(400).json({ error: "Unknown status filter" });
 
-    // History grows without bound — cap it so a long-lived group still fits in
+    // History grows without bound - cap it so a long-lived group still fits in
     // one reasonable response.
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 200);
 
@@ -101,7 +101,7 @@ router.post(
         .json({ error: "Only group admins can vote on approvals" });
 
     // An admin facing removal keeps their vote everywhere EXCEPT on their own
-    // removal — otherwise the person being removed decides it. The quorum was
+    // removal - otherwise the person being removed decides it. The quorum was
     // sized without them (see the remove route), so this only closes the door.
     if (
       approval.type === "member-removal" &&
@@ -115,7 +115,7 @@ router.post(
     // Record the vote ATOMICALLY: it only lands if the approval is still
     // pending and this admin hasn't voted. A read-push-save here lets two
     // concurrent requests (double-tap, or two admins at once) each see a
-    // stale vote list — one vote gets clobbered, or worse, both requests
+    // stale vote list - one vote gets clobbered, or worse, both requests
     // reach the execution threshold and disburse real money twice.
     const voted = await Approval.findOneAndUpdate(
       {
@@ -157,7 +157,7 @@ router.post(
           await Loan.findByIdAndUpdate(claimed.refId, { status: "rejected" });
         // A rejected deletion has to give the group back. It was parked at
         // "deletion-pending" the moment the vote was raised, and nothing else
-        // ever moves it off that — leave it and the group is neither deleted
+        // ever moves it off that - leave it and the group is neither deleted
         // nor usable. Matched on the parked status so this cannot overwrite a
         // state something else set while the vote ran.
         if (claimed.type === "group-deletion" && claimed.groupId)
@@ -194,7 +194,7 @@ router.post(
         result = claimed;
         executed = await executeApproval(claimed, req);
 
-        // The action ran, so the approval is CARRIED OUT — the same stamp the
+        // The action ran, so the approval is CARRIED OUT - the same stamp the
         // /execute route applies. Without it the approval sits at "approved",
         // which the app reads as "approved but never happened" and answers
         // with a Run again button, on money that has already moved.
@@ -226,7 +226,7 @@ router.post(
 );
 
 /**
- * POST /api/approvals/:id/execute  (auth, group admin) — re-run an approval
+ * POST /api/approvals/:id/execute  (auth, group admin) - re-run an approval
  * whose vote carried but whose action could not complete at the time (a refund
  * the wallet couldn't cover yet, say). The votes stand; only the action runs.
  */
@@ -265,7 +265,7 @@ router.post(
       await Approval.updateOne({ _id: claimed._id }, { status: "approved" });
       throw err;
     }
-    // Still blocked — hand the approval back so it can be run again later.
+    // Still blocked - hand the approval back so it can be run again later.
     if (executed?.type?.endsWith("-blocked")) {
       await Approval.updateOne({ _id: claimed._id }, { status: "approved" });
       return res.status(409).json({ error: executed.reason, executed });
@@ -310,8 +310,8 @@ async function executeApproval(approval, req) {
     const phone = member?.phone;
 
     // ── Mobile money on hold: disburse as CASH ──────────────────────────────
-    // The treasurer hands the borrower the notes. Nothing is netted out — there
-    // is no pawaPay fee on cash, and we cannot take our 1% out of a cash box —
+    // The treasurer hands the borrower the notes. Nothing is netted out - there
+    // is no pawaPay fee on cash, and we cannot take our 1% out of a cash box -
     // so the borrower receives the full principal and repays what the loan
     // already says. The wallet guard still applies: a group cannot hand out
     // money it does not hold.
@@ -326,7 +326,7 @@ async function executeApproval(approval, req) {
           type: "loan",
           amount: loan.principal,
           status: "failed",
-          note: "Loan disbursement blocked — insufficient group wallet",
+          note: "Loan disbursement blocked - insufficient group wallet",
           receiptId: generateReceiptId("CHM"),
           paymentMethod: "Cash",
           meta: { loanId: loan._id },
@@ -345,7 +345,7 @@ async function executeApproval(approval, req) {
         memberId: loan.memberId,
         memberName: loan.memberName,
         type: "loan",
-        amount: loan.principal, // full principal — drives circulation and repayment
+        amount: loan.principal, // full principal - drives circulation and repayment
         depositAmount: loan.principal, // handed over in full: no fees on cash
         platformFee: 0, // nothing to take out of notes we never touch
         paymentMethod: "Cash",
@@ -355,7 +355,7 @@ async function executeApproval(approval, req) {
         meta: { loanId: loan._id, cashDisbursement: true },
       });
       // Activates the loan, moves the principal into circulation and tells the
-      // borrower to collect from the treasurer — the same settlement path a
+      // borrower to collect from the treasurer - the same settlement path a
       // completed payout takes.
       await settleCompletedTransaction(txn);
 
@@ -371,7 +371,7 @@ async function executeApproval(approval, req) {
     // the fees: pawaPay % + e-levy + our 1% are netted OUT of the principal, so
     // they RECEIVE principal − fees but REPAY the full loan (outstanding, fixed
     // at request). pricePayout THROWS when fees meet/exceed the principal (a tiny
-    // loan) — record that blocked rather than crash the approval executor.
+    // loan) - record that blocked rather than crash the approval executor.
     const correspondent = providerFromPhone(phone || "");
     let priced;
     try {
@@ -384,7 +384,7 @@ async function executeApproval(approval, req) {
         wholeKwachaOnly: config.pricing.wholeKwachaOnly,
       });
     } catch {
-      // A pricing failure is permanent (re-pricing fails the same way) — not
+      // A pricing failure is permanent (re-pricing fails the same way) - not
       // retryable, so no transfers to re-send.
       const txn = await Transaction.create({
         groupId: loan.groupId,
@@ -394,7 +394,7 @@ async function executeApproval(approval, req) {
         type: "loan",
         amount: loan.principal,
         status: "failed",
-        note: "Loan disbursement blocked — fees meet or exceed the principal",
+        note: "Loan disbursement blocked - fees meet or exceed the principal",
         receiptId: generateReceiptId("CHM"),
         pawapay: {
           payoutId: uuidv4(),
@@ -414,7 +414,7 @@ async function executeApproval(approval, req) {
       };
     }
 
-    // The payout draws real money from the merchant float — never disburse when
+    // The payout draws real money from the merchant float - never disburse when
     // the wallet can't cover the principal (it decrements by the full principal
     // at settlement, and may have drained since the loan was requested). Record a
     // failed, RETRYABLE payout (one rejected transfer of the net amount) so admins
@@ -431,7 +431,7 @@ async function executeApproval(approval, req) {
         depositAmount: priced.netReceived,
         platformFee: priced.platformFee,
         status: "failed",
-        note: "Loan disbursement blocked — insufficient group wallet",
+        note: "Loan disbursement blocked - insufficient group wallet",
         receiptId: generateReceiptId("CHM"),
         pawapay: {
           status: "REJECTED",
@@ -466,12 +466,12 @@ async function executeApproval(approval, req) {
       metadata: [{ fieldName: "loanId", fieldValue: String(loan._id) }],
     });
 
-    // The loan stays "pending" until the payout reaches COMPLETED — the
+    // The loan stays "pending" until the payout reaches COMPLETED - the
     // settlement service then activates it, updates group circulation and
     // notifies the member. Inline below for simulated payouts.
     //
     // A payout REJECTED at initiation never reaches PawaPay, so no callback
-    // or reconciliation will ever finalise it — record it failed immediately
+    // or reconciliation will ever finalise it - record it failed immediately
     // (retryable via retry-payout) and notify member + admins like any failure.
     const rejected = payout.status === "REJECTED";
     const txn = await Transaction.create({
@@ -480,7 +480,7 @@ async function executeApproval(approval, req) {
       memberId: loan.memberId,
       memberName: loan.memberName,
       type: "loan",
-      amount: loan.principal, // full principal — drives circulation/wallet math and repayment
+      amount: loan.principal, // full principal - drives circulation/wallet math and repayment
       depositAmount: priced.netReceived, // NET the borrower received (principal − fees)
       platformFee: priced.platformFee, // our 1%, earned (netted out of the principal)
       status: rejected ? "failed" : payout.simulated ? "completed" : "pending",
@@ -535,7 +535,7 @@ async function executeApproval(approval, req) {
   if (approval.type === "group-deletion" && approval.groupId) {
     // Closing is all that happens: the group document and every transaction,
     // receipt, penalty and statement line under it stay put. The group drops
-    // out of everyone's list and stops accepting anything new — see the
+    // out of everyone's list and stops accepting anything new - see the
     // delete-request route and requireGroupMember.
     const group = await Group.findByIdAndUpdate(
       approval.groupId,
@@ -551,7 +551,7 @@ async function executeApproval(approval, req) {
         {
           type: "governance",
           title: "Group closed",
-          body: `${approval.groupName || "The group"} has been closed. Your record of it — contributions, receipts and statements — stays in the app.`,
+          body: `${approval.groupName || "The group"} has been closed. Your record of it - contributions, receipts and statements - stays in the app.`,
           groupId: approval.groupId,
           groupName: approval.groupName,
           // Their group has ended. They should not find out from it vanishing.
@@ -579,7 +579,7 @@ async function executeApproval(approval, req) {
       return { type: "member-removal-noop", reason: "member already left" };
     }
 
-    // They hold an office now — proposed as an ordinary member, promoted while
+    // They hold an office now - proposed as an ordinary member, promoted while
     // the vote ran. An admin is never removed, so this stops here and the
     // approval stays runnable if the role is handed on later.
     if (ADMIN_ROLES.includes(member.role))
@@ -615,7 +615,7 @@ async function executeApproval(approval, req) {
     } catch (err) {
       if (err.status === 409) {
         // Wallet can't cover the refund yet. The approval stays "approved" so
-        // admins can run it again once repayments land — nobody is removed and
+        // admins can run it again once repayments land - nobody is removed and
         // no money moved.
         return { type: "member-removal-blocked", reason: err.message };
       }

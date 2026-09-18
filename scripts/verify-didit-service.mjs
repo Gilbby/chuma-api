@@ -13,7 +13,7 @@
  *   - applyVerifiedIdentity against a fake user (name derivation + idempotency)
  *   - the webhook's "don't downgrade an already-verified user" rule
  *
- * It imports the service directly — same purity contract as the module.
+ * It imports the service directly - same purity contract as the module.
  */
 
 import crypto from "crypto";
@@ -110,7 +110,7 @@ check("extract fullName preserved", idB.fullName === "John Banda Phiri");
 check("extract null on undefined", extractIdentity(undefined) === null);
 check("extract null on string", extractIdentity("nope") === null);
 
-// ── 4. summarizeDecision — the shape both consumers read ─────────────────────
+// ── 4. summarizeDecision - the shape both consumers read ─────────────────────
 const sumApproved = summarizeDecision({
   status: "Approved",
   decision: { first_name: "Grace", last_name: "Mwangi" },
@@ -228,6 +228,6 @@ if (failures.length === 0) {
   console.log(`PASS (${passed}/${total})`);
   process.exit(0);
 } else {
-  console.log(`FAIL (${passed}/${total}) — ${failures.length} failed`);
+  console.log(`FAIL (${passed}/${total}) - ${failures.length} failed`);
   process.exit(1);
 }

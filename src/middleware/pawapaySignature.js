@@ -16,7 +16,7 @@ import config from "../config/index.js";
  * (Bearer auth) as a JSON array of { id, key } where key is a PEM public key.
  *
  * The canonicalisation (signature base construction) is done by the
- * http-message-signatures library — never hand-rolled here.
+ * http-message-signatures library - never hand-rolled here.
  *
  * The verification logic below (verifySignedCallback) is kept pure and
  * network-free so it can be unit-tested in isolation (see
@@ -49,14 +49,14 @@ export async function verifySignedCallback(message, keyLookup) {
   const member = Array.isArray(digest) ? digest[0] : digest;
   if (!member) return { ok: false, reason: "missing-digest" };
 
-  // Member value looks like `:<base64>:` (sfv byte-sequence) — strip the
+  // Member value looks like `:<base64>:` (sfv byte-sequence) - strip the
   // surrounding colons to get the raw base64 digest.
   const received = String(member).replace(/^:/, "").replace(/:$/, "");
   const expected = createHash("sha512").update(message.body).digest("base64");
   if (received !== expected) return { ok: false, reason: "digest-mismatch" };
 
   // 2. Signature: the library throws on malformed input / unknown key and
-  //    returns falsy on a bad signature — either way it's a failure.
+  //    returns falsy on a bad signature - either way it's a failure.
   try {
     // tolerance: the library defaults to 0 clock-skew tolerance and rejects
     // any signature whose `created` is even 1s ahead of our clock. PawaPay
@@ -90,7 +90,7 @@ async function fetchPublicKeys() {
   );
   keyCache.clear();
   for (const entry of Array.isArray(data) ? data : []) {
-    // Strict String(...) comparison on both sides — PawaPay's own example repo
+    // Strict String(...) comparison on both sides - PawaPay's own example repo
     // buggily uses `=` (assignment) here; we deliberately do not copy that.
     keyCache.set(String(entry.id), {
       pem: entry.key,
@@ -123,7 +123,7 @@ export function createPawaPayKeyLookup() {
 
     let entry = keyCache.get(wanted);
     if (!entry) {
-      // Miss could mean a rotated key we haven't fetched yet — force one refetch.
+      // Miss could mean a rotated key we haven't fetched yet - force one refetch.
       await fetchPublicKeys();
       entry = keyCache.get(wanted);
     }
@@ -175,7 +175,7 @@ export function verifyPawaPayCallbackMiddleware() {
       }
       return next();
     } catch (err) {
-      // Never let verification crash the request — treat any throw as a 401.
+      // Never let verification crash the request - treat any throw as a 401.
       console.warn(
         `[WEBHOOK] verification error on ${req.originalUrl}: ${err.message}`
       );

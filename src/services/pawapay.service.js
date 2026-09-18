@@ -52,7 +52,7 @@ export function providerFromPhone(phone) {
 
 /**
  * PawaPay statement descriptions must be 4-22 chars, alphanumeric and spaces
- * ONLY — anything else (e.g. a hyphen) gets the whole payment REJECTED with
+ * ONLY - anything else (e.g. a hyphen) gets the whole payment REJECTED with
  * PARAMETER_INVALID. Sanitise centrally so no call site can slip one through.
  */
 function toStatementDescription(text, fallback) {
@@ -153,14 +153,14 @@ async function sendOneTransfer({ amount, msisdn, correspondent, statementDescrip
 /**
  * Initiate a PAYOUT (send to member). A payout ABOVE the operator's per-
  * transaction ceiling is split into ≤ceiling transfers that sum to `amount`
- * (an account can't receive more than the ceiling in one go — see config
+ * (an account can't receive more than the ceiling in one go - see config
  * splitForPayout); a normal payout is a single transfer. Returns:
  *   { status, transfers:[{payoutId, amount, status, failureReason?}], simulated }
  * where the parent-level `status` the caller records as Transaction.status is:
- *   REJECTED  — every transfer bounced at initiation (nothing reached PawaPay;
+ *   REJECTED  - every transfer bounced at initiation (nothing reached PawaPay;
  *               record failed, fully retryable)
- *   COMPLETED — simulated (all transfers complete immediately)
- *   ACCEPTED  — ≥1 transfer accepted; the parent settles when they all COMPLETE
+ *   COMPLETED - simulated (all transfers complete immediately)
+ *   ACCEPTED  - ≥1 transfer accepted; the parent settles when they all COMPLETE
  *               via the webhook/cron reconciliation (see settlement service).
  */
 export async function initiatePayout({
@@ -189,7 +189,7 @@ export async function initiatePayout({
 
 /**
  * Re-send specific transfer amounts (used by retry-payout for the non-COMPLETED
- * chunks of a partially-failed payout — already ≤ceiling, so NOT re-split).
+ * chunks of a partially-failed payout - already ≤ceiling, so NOT re-split).
  * Returns fresh transfer records (in the same order as `amounts`) to swap into
  * the parent's pawapay.transfers, plus `simulated`.
  */

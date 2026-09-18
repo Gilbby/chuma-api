@@ -28,7 +28,7 @@ export function isGroupAdmin(group, userId) {
  * A group whose registration fee has not settled yet is refused with 423: it
  * exists only so that first payment has somewhere to land, and nothing inside
  * it may be read or written until the deposit COMPLETES. The two routes the
- * founder still needs — reading the group and retrying the payment — opt out
+ * founder still needs - reading the group and retrying the payment - opt out
  * with `{ allowPendingPayment: true }`.
  */
 export function requireGroupMember(source = "id", { allowPendingPayment = false } = {}) {
@@ -46,13 +46,13 @@ export function requireGroupMember(source = "id", { allowPendingPayment = false 
 
     if (!allowPendingPayment && group.status === "pending-payment")
       return res.status(423).json({
-        error: "This group is not active yet — its registration fee is still being confirmed",
+        error: "This group is not active yet - its registration fee is still being confirmed",
         code: "group_pending_payment",
       });
 
     // A closed (deleted) group is history, not a workspace. Everything written
-    // into it — transactions, receipts, penalties, the lines behind a member's
-    // statement — is deliberately kept and stays readable, so a GET goes
+    // into it - transactions, receipts, penalties, the lines behind a member's
+    // statement - is deliberately kept and stays readable, so a GET goes
     // through. Anything that would write into a group its members no longer
     // have does not.
     if (group.status === "closed" && req.method !== "GET")

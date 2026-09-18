@@ -8,7 +8,7 @@ import { notify, notifyAll } from "./notify.service.js";
 import { sendSms } from "./sms.service.js";
 
 /**
- * Settlement service — the ONLY place payment side effects are applied.
+ * Settlement service - the ONLY place payment side effects are applied.
  *
  * Money-moving routes initiate a PawaPay deposit/payout and record a pending
  * Transaction, but do NOT touch balances or domain state. When the payment
@@ -37,7 +37,7 @@ import { sendSms } from "./sms.service.js";
 // Each applies ONE kind of side effect with its own atomic guard, so the same
 // logic composes safely whether it settles a single-type transaction or one
 // leg of a "combined" deposit. They never assume they are the whole transaction
-// (no reading of txn.amount for figures) — the caller passes explicit amounts.
+// (no reading of txn.amount for figures) - the caller passes explicit amounts.
 
 /**
  * Credit a member's savings (regular contribution + any top-up) and roll it up
@@ -63,7 +63,7 @@ async function creditMemberSavings({ groupId, memberId, amount }) {
  * Roll a settled contribution up into the project it was given for. Same $inc
  * reasoning as creditMemberSavings: several members can give toward the same
  * project at once. A project deleted or archived between payment and settlement
- * simply matches nothing — the money is still credited to the member and the
+ * simply matches nothing - the money is still credited to the member and the
  * group above, it just stops being attributed to a project that is gone.
  */
 async function creditProject({ groupId, projectId, amount }) {
@@ -75,7 +75,7 @@ async function creditProject({ groupId, projectId, amount }) {
 }
 
 /**
- * Book a collection-side platform fee as a SIDE record only — it is never
+ * Book a collection-side platform fee as a SIDE record only - it is never
  * pooled and touches no group/wallet/savings figure. PlatformRevenue's
  * unique+sparse transactionId index makes this exactly-once: a replayed
  * callback / cron double-fire hits a duplicate key (11000), which we swallow.
@@ -101,7 +101,7 @@ async function bookCollectionPlatformFee(txn) {
 /**
  * Settle a batch of penalties in ONE pass. Atomic claim (status → paid) PER
  * penalty: two payment transactions for the same penalty settling concurrently
- * must credit the pool exactly once — a read-check-save would let both pass the
+ * must credit the pool exactly once - a read-check-save would let both pass the
  * "already paid" check. Each claim is independent, so a partially-claimed batch
  * still credits the rest exactly once rather than skipping them.
  */
@@ -126,7 +126,7 @@ async function settlePenaltyBatch({ groupId, penaltyIds }) {
 
 /**
  * Apply ONE loan repayment of `amount` against `loanId`. CAS on outstanding:
- * clamp against the balance we read, and only apply if it hasn't moved — two
+ * clamp against the balance we read, and only apply if it hasn't moved - two
  * repayments settling concurrently must never double-advance the due date or
  * push the balance below zero.
  */
@@ -185,8 +185,8 @@ async function applyLoanRepayment({ loanId, amount }) {
 /**
  * A group's registration fee has settled and it has just gone from
  * "pending-payment" to "active". Its co-admin invitations were held back until
- * this moment — inviting people into a group that might never start would leave
- * them holding an invite to nothing — so they go out now.
+ * this moment - inviting people into a group that might never start would leave
+ * them holding an invite to nothing - so they go out now.
  *
  * In-app notification only for invitees who already have an account; SMS to
  * everyone, so an unregistered invitee knows to sign up.
@@ -225,7 +225,7 @@ async function announceGroupActivated(groupId) {
       userId: chair.userId,
       type: "governance",
       title: "Group is now active",
-      body: `${group.name} is live — the registration fee was received.`,
+      body: `${group.name} is live - the registration fee was received.`,
       groupId: group._id,
       groupName: group.name,
       sms: true,
@@ -256,7 +256,7 @@ export async function settleCompletedTransaction(txn) {
 
     case "penalty": {
       // One transaction can settle SEVERAL penalties (paid together in a single
-      // deposit — POST /penalties/pay). meta.penaltyId is the older single-pay
+      // deposit - POST /penalties/pay). meta.penaltyId is the older single-pay
       // shape; keep reading it so transactions already pending when this shipped
       // still settle.
       const ids = txn.meta?.penaltyIds?.length
@@ -311,7 +311,7 @@ export async function settleCompletedTransaction(txn) {
       );
       if (activated) await announceGroupActivated(txn.groupId);
       // CAS loop: feePaidThrough is date arithmetic on its own current value,
-      // so guard the write on the value we read — otherwise a concurrent fee
+      // so guard the write on the value we read - otherwise a concurrent fee
       // settlement overwrites ours and paid months are silently lost.
       for (let attempt = 0; attempt < 5; attempt++) {
         const group = await Group.findById(txn.groupId)
@@ -337,7 +337,7 @@ export async function settleCompletedTransaction(txn) {
     }
 
     case "loan": {
-      // Disbursement payout completed: the member has the money — activate.
+      // Disbursement payout completed: the member has the money - activate.
       // Atomic claim on the pending status: a duplicate settlement must not
       // double-apply the circulation/wallet effects.
       const loan = txn.meta?.loanId
@@ -372,7 +372,7 @@ export async function settleCompletedTransaction(txn) {
       );
 
       // The borrower bore the fees (netted OUT of the principal), so our 1%
-      // platform fee is EARNED revenue — booked positive, source "payout", the
+      // platform fee is EARNED revenue - booked positive, source "payout", the
       // same as a share-out. A SIDE record only: it touches no group/wallet/
       // loanCirculation/loan/member figure. Runs inside this branch so it
       // inherits the caller's exactly-once pending→final guard: it books once
@@ -391,7 +391,7 @@ export async function settleCompletedTransaction(txn) {
         } catch (err) {
           // Duplicate key (11000) = this txn's revenue was ALREADY booked by a
           // prior settlement (replayed callback / cron double-fire). That's the
-          // exactly-once guard working — swallow it. Re-throw anything else.
+          // exactly-once guard working - swallow it. Re-throw anything else.
           if (err?.code !== 11000) throw err;
         }
       }
@@ -399,7 +399,7 @@ export async function settleCompletedTransaction(txn) {
       if (loan.memberId) {
         const net = txn.depositAmount ?? loan.principal;
         const fees = Math.max(0, loan.principal - net);
-        // A cash loan is handed over by the treasurer, not sent anywhere — and
+        // A cash loan is handed over by the treasurer, not sent anywhere - and
         // it carries no fees, so the borrower gets the whole principal.
         const inCash = txn.paymentMethod === "Cash";
         await notify({
@@ -435,14 +435,14 @@ export async function settleCompletedTransaction(txn) {
           ...(txn.memberId
             ? { $set: { "members.$[m].savings": 0, "members.$[m].contributions": 0 } }
             : {}),
-          // The share left the group's wallet when the payout completed —
+          // The share left the group's wallet when the payout completed -
           // without this the wallet overstates cash on hand.
           $inc: { totalSavings: -snapshot, walletBalance: -share },
         },
         txn.memberId ? { arrayFilters: [{ "m.userId": txn.memberId }] } : {}
       );
 
-      // Book the platform fee as a SIDE record only — never pooled, touches no
+      // Book the platform fee as a SIDE record only - never pooled, touches no
       // group/wallet/savings figure. source "payout" separates payout-side
       // revenue from collection-side. Runs inside this branch so it inherits the
       // caller's exactly-once pending→final guard: it books once when the payout
@@ -461,7 +461,7 @@ export async function settleCompletedTransaction(txn) {
         } catch (err) {
           // Duplicate key (11000) = this txn's revenue was ALREADY booked by a
           // prior settlement (replayed callback / cron double-fire). That's the
-          // exactly-once guard working — swallow it. Re-throw anything else.
+          // exactly-once guard working - swallow it. Re-throw anything else.
           if (err?.code !== 11000) throw err;
         }
       }
@@ -495,10 +495,10 @@ export async function settleCompletedTransaction(txn) {
       // a payout that never completes leaves them a member with their savings
       // intact rather than an ex-member the group still owes.
       const snapshot = Math.max(0, Number(txn.meta?.memberSavings) || 0);
-      const paidOut = Math.abs(txn.amount); // full stake — netted debt returned via Leg A
+      const paidOut = Math.abs(txn.amount); // full stake - netted debt returned via Leg A
       // The row is retired, NOT wiped. Live savings go to 0 because that money
       // really did leave the group, but the contribution count and the figures
-      // as they stood at the exit stay on the record — the group's history of
+      // as they stood at the exit stay on the record - the group's history of
       // this member survives their removal.
       await Group.updateOne(
         { _id: txn.groupId },
@@ -606,7 +606,7 @@ const FAIL_NOTIF_TYPE = {
 
 /**
  * A payment reached FAILED. Nothing was applied at initiation, so there is
- * nothing to undo — but the people involved must know.
+ * nothing to undo - but the people involved must know.
  */
 export async function handleFailedTransaction(txn) {
   const label = FAIL_LABELS[txn.type] || "payment";
@@ -634,7 +634,7 @@ export async function handleFailedTransaction(txn) {
     });
   }
 
-  // Failed payouts mean the group still holds money it believes it sent out —
+  // Failed payouts mean the group still holds money it believes it sent out -
   // admins must retry (disbursement) or re-run the member's share-out.
   if (isPayout && txn.groupId) {
     const group = await Group.findById(txn.groupId).lean();
@@ -667,13 +667,13 @@ const PAYOUT_FINAL = ["COMPLETED", "FAILED", "REJECTED"];
 
 /**
  * Reconcile ONE payout transfer's final status (COMPLETED / FAILED) into its
- * parent transaction. A payout can be several transfers — a large amount is
- * split into ≤operator-ceiling chunks (see pawapay.service) — and the parent
+ * parent transaction. A payout can be several transfers - a large amount is
+ * split into ≤operator-ceiling chunks (see pawapay.service) - and the parent
  * settles ONLY when EVERY transfer COMPLETES.
  *
  * Shared by the webhook and the reconciliation cron. Two atomic layers keep it
  * exactly-once under concurrent transfer callbacks:
- *   1. mark THIS transfer final — guarded on it being non-final (so a replayed
+ *   1. mark THIS transfer final - guarded on it being non-final (so a replayed
  *      callback is a no-op);
  *   2. once no transfer is still in flight: if ALL COMPLETED, flip the parent
  *      pending→completed and settle once; if ≥1 failed, flip pending→failed and
@@ -686,7 +686,7 @@ export async function applyPayoutChunkStatus(payoutId, status, failureReason) {
   if (!payoutId || typeof payoutId !== "string") return "no-op";
   if (status !== "COMPLETED" && status !== "FAILED") return "no-op";
 
-  // 1) Atomically mark this transfer final — only if it isn't already (the
+  // 1) Atomically mark this transfer final - only if it isn't already (the
   // positional `$` targets the element the $elemMatch found). A replay for an
   // already-final transfer matches nothing → parent is null → no-op.
   const parent = await Transaction.findOneAndUpdate(

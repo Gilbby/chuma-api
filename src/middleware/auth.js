@@ -33,7 +33,7 @@ export async function requireAuth(req, res, next) {
 
 /**
  * Require a KYC-verified user. Must run AFTER requireAuth (reads req.user).
- * Reserved for CHAIRPERSON-level actions — founding a group and distributing a
+ * Reserved for CHAIRPERSON-level actions - founding a group and distributing a
  * share-out. Ordinary members transact under requireRealName instead: share-out
  * and loan payouts are addressed by mobile-money number, not by verified name.
  * Returns 403 with a machine-readable code so the app can route to the
@@ -48,7 +48,7 @@ export function requireKyc(req, res, next) {
   });
 }
 
-/** A display name the user actually chose — not the signup stub or a phone. */
+/** A display name the user actually chose - not the signup stub or a phone. */
 export function hasRealName(name) {
   const trimmed = String(name || "").trim();
   if (trimmed.length < 2) return false;

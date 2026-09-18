@@ -30,12 +30,12 @@ for (let i = 1; i <= 5 && !connected; i++) {
     await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 30000 });
     connected = true;
   } catch (e) {
-    console.log(`mongo connect attempt ${i} failed: ${e.message} — retrying in 10s`);
+    console.log(`mongo connect attempt ${i} failed: ${e.message} - retrying in 10s`);
     await new Promise((r) => setTimeout(r, 10000));
   }
 }
 if (!connected) {
-  console.error("Could not reach Atlas — network problem. Re-run later.");
+  console.error("Could not reach Atlas - network problem. Re-run later.");
   process.exit(2);
 }
 const db = mongoose.connection.db;
@@ -115,7 +115,7 @@ try {
     txns.length === 2 && txns.every((t) => t.status === "completed" && t.pawapay?.status === "COMPLETED"));
 
   // Settlement effects are applied after the txn flip (webhook responds before
-  // they're durable) — poll briefly for the final group state.
+  // they're durable) - poll briefly for the final group state.
   let g = null;
   const t1 = Date.now();
   while (Date.now() - t1 < 60 * 1000) {
@@ -133,7 +133,7 @@ try {
     g.totalSavings === 0 && g.cycleProgress === 0);
 
   const approval = await db.collection("approvals").findOne({ _id: oid(approvalId) });
-  check("approval consumed (status executed — cannot distribute twice)",
+  check("approval consumed (status executed - cannot distribute twice)",
     approval?.status === "executed");
 } finally {
   // Cleanup always runs, even if assertions or the network blew up above.
@@ -142,7 +142,7 @@ try {
   await db.collection("approvals").deleteMany({ groupId });
   await db.collection("groups").deleteOne({ _id: groupId });
   await db.collection("users").deleteMany({ _id: { $in: [idA, idB] } });
-  console.log("Cleanup done — synthetic group/users/txns/approvals/notifications removed.");
+  console.log("Cleanup done - synthetic group/users/txns/approvals/notifications removed.");
   await mongoose.disconnect();
 }
 

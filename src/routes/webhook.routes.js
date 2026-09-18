@@ -25,7 +25,7 @@ const router = express.Router();
  * PawaPay sends the FINAL status of deposits/payouts here.
  *
  * Callback URLs are configured ONLY in the PawaPay Dashboard (per environment,
- * under Callback URLs) — the API has no per-request callback field in v1 or v2,
+ * under Callback URLs) - the API has no per-request callback field in v1 or v2,
  * and the PAWAPAY_*_CALLBACK_URL .env vars are informational, not sent anywhere.
  * Point the Dashboard at:
  *   https://<public-base>/api/webhooks/pawapay/deposit
@@ -67,7 +67,7 @@ async function applyFinalStatus(idField, id, status, failureReason) {
   if (!txn) return "no-op";
 
   // We won the pending→final flip, so we apply the settlement effects exactly
-  // once. Never let a settlement error fail the callback response — PawaPay
+  // once. Never let a settlement error fail the callback response - PawaPay
   // retries would no-op on the flip and the effects would be lost silently;
   // log loudly for manual repair instead.
   try {

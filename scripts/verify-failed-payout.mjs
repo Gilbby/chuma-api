@@ -17,11 +17,11 @@ import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
 
 const GROUP_ID = "6a47ce19b993fc0dbfd4c379";
-const ADMIN_ID = "6a47cb8be9d07482567dfcc0"; // Gilbert — Chairperson of TEST
+const ADMIN_ID = "6a47cb8be9d07482567dfcc0"; // Gilbert - Chairperson of TEST
 const API = "http://localhost:5000";
 const AMOUNT = 1;
 // Airtel Zambia sandbox payout number that always fails (RECIPIENT_NOT_FOUND).
-// NB: distinct from the deposit-failure numbers — see docs.pawapay.io test numbers.
+// NB: distinct from the deposit-failure numbers - see docs.pawapay.io test numbers.
 const FAIL_PAYOUT_PHONE = "260973456089";
 const TEST_NAME = "Payout Fail Test";
 
@@ -31,12 +31,12 @@ for (let i = 1; i <= 5 && !connected; i++) {
     await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 30000 });
     connected = true;
   } catch (e) {
-    console.log(`mongo connect attempt ${i} failed: ${e.message} — retrying in 10s`);
+    console.log(`mongo connect attempt ${i} failed: ${e.message} - retrying in 10s`);
     await new Promise((r) => setTimeout(r, 10000));
   }
 }
 if (!connected) {
-  console.error("Could not reach Atlas — network problem. Re-run later.");
+  console.error("Could not reach Atlas - network problem. Re-run later.");
   process.exit(2);
 }
 const db = mongoose.connection.db;
@@ -139,7 +139,7 @@ try {
   await db.collection("notifications").deleteMany({ userId }); // borrower's
   if (txnId) await db.collection("notifications").deleteMany({ transactionId: txnId });
   await db.collection("notifications").deleteMany({ body: new RegExp(TEST_NAME) });
-  console.log("Cleanup done — synthetic user/member/loan/approval/txn/notifications removed.");
+  console.log("Cleanup done - synthetic user/member/loan/approval/txn/notifications removed.");
   await mongoose.disconnect();
 }
 

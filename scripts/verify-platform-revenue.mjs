@@ -3,19 +3,19 @@
 // never contaminates the pool/wallet math, and (b) exactly-once under a
 // replayed callback:
 //
-//   contribution — pool credited by EXACTLY base (K100), never the grossed-up
+//   contribution - pool credited by EXACTLY base (K100), never the grossed-up
 //                  deposit (K109) / base+fee (K102); fee booked source
 //                  "contribution".
-//   share-out    — pool decremented by the FULL owed/snapshot (K100), never the
+//   share-out    - pool decremented by the FULL owed/snapshot (K100), never the
 //                  netReceived actually sent (K96); fee booked source "payout".
-//   loan         — loanCirculation +FULL principal (K100) / walletBalance
+//   loan         - loanCirculation +FULL principal (K100) / walletBalance
 //                  -FULL principal (K100). Chuma ABSORBS the provider fees so
 //                  the borrower receives the full principal (depositAmount ===
 //                  principal), and the absorbed cost books as NEGATIVE revenue
 //                  (-K3), source "payout". No platform fee is charged.
 //
 // In all three, the booking is a side record touching no group/wallet/savings/
-// circulation figure, and it books EXACTLY ONCE — a replayed callback reaching
+// circulation figure, and it books EXACTLY ONCE - a replayed callback reaching
 // the settlement body again must not double-book, thanks to the unique+sparse
 // transactionId index plus the 11000 swallow.
 // Runs directly against the service (no HTTP); cleans up everything.
@@ -34,18 +34,18 @@ for (let i = 1; i <= 5 && !connected; i++) {
     await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 30000 });
     connected = true;
   } catch (e) {
-    console.log(`mongo connect attempt ${i} failed: ${e.message} — retrying in 10s`);
+    console.log(`mongo connect attempt ${i} failed: ${e.message} - retrying in 10s`);
     await new Promise((r) => setTimeout(r, 10000));
   }
 }
 if (!connected) {
-  console.error("Could not reach Atlas — network problem. Re-run later.");
+  console.error("Could not reach Atlas - network problem. Re-run later.");
   process.exit(2);
 }
 const { settleCompletedTransaction } = await import("../src/services/settlement.service.js");
 const { PlatformRevenue } = await import("../src/models/PlatformRevenue.js");
 // Ensure the unique+sparse transactionId index is actually built before we
-// test exactly-once — otherwise the second booking would silently succeed.
+// test exactly-once - otherwise the second booking would silently succeed.
 await PlatformRevenue.init();
 const db = mongoose.connection.db;
 const oid = () => new mongoose.Types.ObjectId();
@@ -53,7 +53,7 @@ const oid = () => new mongoose.Types.ObjectId();
 const results = [];
 const check = (name, cond, detail = "") => {
   results.push([name, cond]);
-  console.log(`${cond ? "PASS" : "FAIL"}: ${name}${cond ? "" : ` — ${detail}`}`);
+  console.log(`${cond ? "PASS" : "FAIL"}: ${name}${cond ? "" : ` - ${detail}`}`);
 };
 
 const groupId = oid();
@@ -95,8 +95,8 @@ await db.collection("groups").insertOne({
   status: "active", createdAt: now, updatedAt: now,
 });
 // Persist a real share-out transaction, as shareout.service writes it:
-// amount = 100 (full owed — what the pool decrements by), depositAmount = 96
-// (netReceived after fees, actually sent — must NOT drive the pool),
+// amount = 100 (full owed - what the pool decrements by), depositAmount = 96
+// (netReceived after fees, actually sent - must NOT drive the pool),
 // platformFee = 2, meta.memberSavings = 100 (snapshot the branch zeroes to).
 await db.collection("transactions").insertOne({
   _id: soTxnId, type: "share-out", status: "completed",
@@ -124,7 +124,7 @@ await db.collection("loans").insertOne({
   status: "pending", history: [], createdAt: now, updatedAt: now,
 });
 // Persist a real loan disbursement transaction, as approval.routes writes it:
-// amount = 100 (full principal — drives circulation/wallet math), depositAmount
+// amount = 100 (full principal - drives circulation/wallet math), depositAmount
 // = 100 (the borrower receives the FULL principal; Chuma absorbs the fees),
 // platformFee = 0 (never charged on a disbursement), feesAbsorbed = 3 (the
 // provider cost we ate), meta.loanId = the loan the branch activates.
@@ -138,7 +138,7 @@ await db.collection("transactions").insertOne({
 console.log(`Seeded synthetic contribution ${txnId} (group ${groupId}), share-out ${soTxnId} (group ${soGroupId}), loan ${lnTxnId} (group ${lnGroupId})`);
 
 try {
-  // Load the persisted doc back and settle it — same object the callback path
+  // Load the persisted doc back and settle it - same object the callback path
   // would hand to the service.
   const txn = await db.collection("transactions").findOne({ _id: txnId });
 
@@ -148,9 +148,9 @@ try {
   let member = g.members.find((m) => String(m.userId) === String(memberId));
   check("pool credited by exactly BASE (savings=100, not 109/102)",
     member.savings === 100, `savings=${member.savings}`);
-  check("totalSavings=100 — K2 did NOT leak into the pool",
+  check("totalSavings=100 - K2 did NOT leak into the pool",
     g.totalSavings === 100, `totalSavings=${g.totalSavings}`);
-  check("walletBalance=100 — grossed-up 109 not pooled",
+  check("walletBalance=100 - grossed-up 109 not pooled",
     g.walletBalance === 100, `walletBalance=${g.walletBalance}`);
   check("member.contributions incremented to 1",
     member.contributions === 1, `contributions=${member.contributions}`);
@@ -169,7 +169,7 @@ try {
   // ── 3. SECOND settle of the SAME txn (replayed callback reaching the body) ──
   // We assert ONLY the booking's idempotency: the unique+sparse index + the
   // 11000 swallow must keep PlatformRevenue at exactly one doc. The pool $inc
-  // DOES double-apply on a direct second call — that is EXPECTED here and is
+  // DOES double-apply on a direct second call - that is EXPECTED here and is
   // prevented in production upstream by the atomic pending→final guard, NOT by
   // this branch. So we deliberately do not assert the pool stays unchanged.
   await settleCompletedTransaction(txn);
@@ -201,7 +201,7 @@ try {
     `doc=${JSON.stringify(soRevDocs[0])}`);
 
   // ── 3. SECOND settle of the SAME share-out txn (replayed callback) ──
-  // As in the contribution scenario, assert ONLY the booking's idempotency —
+  // As in the contribution scenario, assert ONLY the booking's idempotency -
   // the pool $inc double-applying on a direct second call is expected and is
   // guarded upstream by the atomic pending→final guard, not by this branch.
   await settleCompletedTransaction(soTxn);
@@ -220,7 +220,7 @@ try {
     lnLoan.status === "active", `status=${lnLoan.status}`);
   check("loan: loanCirculation +FULL principal (0 → 100)",
     lg.loanCirculation === 100, `loanCirculation=${lg.loanCirculation}`);
-  check("loan: walletBalance -FULL principal (500 → 400) — the absorbed fee never touches the group",
+  check("loan: walletBalance -FULL principal (500 → 400) - the absorbed fee never touches the group",
     lg.walletBalance === 400, `walletBalance=${lg.walletBalance}`);
 
   // ── 2. PlatformRevenue side record: exactly one, NEGATIVE (a cost), payout ──
@@ -244,7 +244,7 @@ try {
   await db.collection("transactions").deleteMany({ _id: { $in: [txnId, soTxnId, lnTxnId] } });
   await db.collection("loans").deleteOne({ _id: lnLoanId });
   await db.collection("platformrevenues").deleteMany({ transactionId: { $in: [txnId, soTxnId, lnTxnId] } });
-  console.log("Cleanup done — synthetic platform-revenue documents removed.");
+  console.log("Cleanup done - synthetic platform-revenue documents removed.");
   await mongoose.disconnect();
 }
 

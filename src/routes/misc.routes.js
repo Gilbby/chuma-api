@@ -53,7 +53,7 @@ const router = express.Router();
  * of contributions, matching the frontend chart shape: [{ label, value }].
  * `value` is the raw kwacha cumulative savings for that month (the chart
  * scales itself). New/no-history groups yield a flat zero series of the right
- * length with correct trailing month labels — never mock data.
+ * length with correct trailing month labels - never mock data.
  */
 async function buildSavingsTrend(groupId, months = 6) {
   const txns = await Transaction.find({ groupId, type: "contribution" })
@@ -128,7 +128,7 @@ router.get(
 );
 
 /**
- * POST /api/penalties  (auth, admin) — manually record a violation.
+ * POST /api/penalties  (auth, admin) - manually record a violation.
  * For offenses the system can't detect from data (missed meetings,
  * misconduct, …). Creates the penalty + member notification via the same
  * issuePenalty path as automatic detection. Never deduped (no dueContext).
@@ -257,7 +257,7 @@ router.post(
 );
 
 /**
- * POST /api/penalties/:id/pay  (auth) — pay a penalty.
+ * POST /api/penalties/:id/pay  (auth) - pay a penalty.
  * Collects via PawaPay; routes funds per the group constitution.
  */
 router.post(
@@ -279,12 +279,12 @@ router.post(
 
     const phone = req.body.payerPhone || req.user.phone;
     const isCash = req.body.paymentMethod === "Cash";
-    // Mobile money is on hold for member money — penalties are paid in cash.
+    // Mobile money is on hold for member money - penalties are paid in cash.
     const held = rejectIfMobileMoneyHeld(req.body.paymentMethod);
     if (held) return res.status(held.status).json(held.body);
 
     // Validate the full transaction against the model BEFORE initiating the
-    // deposit — PawaPay must never move money for a request we would reject.
+    // deposit - PawaPay must never move money for a request we would reject.
     const txn = new Transaction({
       groupId: penalty.groupId,
       groupName: penalty.groupName,
@@ -329,7 +329,7 @@ router.post(
       return res.status(402).json({ error: "Payment rejected" });
 
     // Penalty is only marked paid (and funds routed) by the settlement
-    // service once the payment reaches COMPLETED — inline below for simulated.
+    // service once the payment reaches COMPLETED - inline below for simulated.
     txn.pawapay = { depositId: deposit.id, status: deposit.status };
     if (deposit.simulated) txn.status = "completed";
     await txn.save();
@@ -349,12 +349,12 @@ router.post(
 );
 
 /**
- * POST /api/penalties/pay  (auth) — pay SEVERAL penalties in ONE deposit.
+ * POST /api/penalties/pay  (auth) - pay SEVERAL penalties in ONE deposit.
  *
  * The member picks penalties on the payment screen and pays the total once, so
  * they get a single PawaPay prompt and are charged a single transaction fee.
  * Settlement marks every penalty paid and routes each per its own
- * fundsDestination — see the "penalty" branch of settlement.service.js.
+ * fundsDestination - see the "penalty" branch of settlement.service.js.
  *
  * All penalties must belong to the SAME group: one deposit produces one
  * transaction, and a transaction belongs to one group.
@@ -400,12 +400,12 @@ router.post(
     const phone = req.body.payerPhone || req.user.phone;
     const first = penalties[0];
     const isCash = req.body.paymentMethod === "Cash";
-    // Mobile money is on hold for member money — penalties are paid in cash.
+    // Mobile money is on hold for member money - penalties are paid in cash.
     const held = rejectIfMobileMoneyHeld(req.body.paymentMethod);
     if (held) return res.status(held.status).json(held.body);
 
     // Validate the full transaction against the model BEFORE initiating the
-    // deposit — PawaPay must never move money for a request we would reject.
+    // deposit - PawaPay must never move money for a request we would reject.
     const txn = new Transaction({
       groupId: first.groupId,
       groupName: first.groupName,
@@ -425,7 +425,7 @@ router.post(
     await txn.validate(); // ValidationError → 400 via the error middleware
 
     // Cash: nothing is marked paid until an admin confirms the money reached
-    // them — one receipt for the whole batch, like the unified checkout.
+    // them - one receipt for the whole batch, like the unified checkout.
     if (isCash) {
       const group = await Group.findById(first.groupId).lean();
       if (!group) return res.status(404).json({ error: "Group not found" });
@@ -452,7 +452,7 @@ router.post(
       return res.status(402).json({ error: "Payment rejected" });
 
     // Penalties are only marked paid (and funds routed) by the settlement
-    // service once the payment reaches COMPLETED — inline below for simulated.
+    // service once the payment reaches COMPLETED - inline below for simulated.
     txn.pawapay = { depositId: deposit.id, status: deposit.status };
     if (deposit.simulated) txn.status = "completed";
     await txn.save();
@@ -540,7 +540,7 @@ router.get(
 );
 
 /** GET /api/groups/:groupId/transactions?type=&range= (auth)
- *  Group-wide ledger — all members' transactions. Members only. */
+ *  Group-wide ledger - all members' transactions. Members only. */
 router.get(
   "/groups/:groupId/transactions",
   requireAuth,
@@ -571,7 +571,7 @@ router.get(
  *
  * `scope=member` (default) is the caller's own account; `groupId` narrows it
  * to one group, and omitted it spans every group they belong to.
- * `scope=group` is the whole group's book — every member's movements in it —
+ * `scope=group` is the whole group's book - every member's movements in it -
  * which needs a `groupId` and a Chairperson / Treasurer / Secretary role in
  * that group.
  */
@@ -638,7 +638,7 @@ const PAYOUT_DESCRIPTIONS = {
  * POST /api/transactions/:id/confirm-payout  (auth, treasurer/chairperson)
  * Body: { paymentMethod?: "Cash" | "MTN MoMo" | "Airtel Money" | "Zamtel Kwacha" | "Bank Transfer" }
  *
- * Mark a payout the group settled OUTSIDE the app as paid — notes across a
+ * Mark a payout the group settled OUTSIDE the app as paid - notes across a
  * table, mobile money sent from the treasurer's own phone, a bank transfer.
  * Settling it is what retires the member's stake AND what sends them their
  * receipt, so until an admin taps this the member is still owed the money and
@@ -647,7 +647,7 @@ const PAYOUT_DESCRIPTIONS = {
  * The TREASURER does this. They hold the group's money, they are the one who
  * actually pays each member, and they are the only person who can honestly say
  * it left. The chairperson stands in only when the group has no active
- * treasurer — the same fallback raiseCashReceipt uses for money coming in,
+ * treasurer - the same fallback raiseCashReceipt uses for money coming in,
  * because a group between treasurers must not have its share-out frozen.
  */
 router.post(
@@ -705,7 +705,7 @@ router.post(
  * POST /api/transactions/:id/retry-payout  (auth, treasurer/chairperson)
  * Re-send a FAILED loan-disbursement, share-out or removal-refund payout. Creates a fresh
  * pending transaction (carrying the original's settlement meta) that settles
- * through the normal webhook/cron path. One retry per failed transaction —
+ * through the normal webhook/cron path. One retry per failed transaction -
  * claimed atomically so a double-tap can never send the money twice; if the
  * retry itself fails, the NEW failed transaction can be retried in turn.
  */
@@ -752,7 +752,7 @@ router.post(
     if (!member?.phone)
       return res.status(400).json({ error: "Member has no phone on record" });
 
-    // A payout draws real money from the merchant float — never resend more
+    // A payout draws real money from the merchant float - never resend more
     // than the group's wallet actually holds. The wallet is charged the FULL
     // owed (loan principal / share-out share) at settlement, so cover-check
     // against that, not against the net that goes out the door.
@@ -765,7 +765,7 @@ router.post(
     // Only the transfers that did NOT complete are re-sent. A large payout is
     // split into ≤ceiling chunks; any chunk that already COMPLETED delivered
     // real money we must NEVER send twice. Chunks are already ≤ceiling, so they
-    // are not re-split, and NOT re-priced — we resend the exact amounts first
+    // are not re-split, and NOT re-priced - we resend the exact amounts first
     // sent (re-pricing would deduct fees a second time).
     const toResend = failed.pawapay.transfers.filter((t) => t.status !== "COMPLETED");
     if (!toResend.length)
@@ -797,7 +797,7 @@ router.post(
     // non-completed one for its fresh re-sent record (both lists are in the same
     // original order). The parent never settled/booked while it was failed, so
     // when it finally COMPLETES its platform revenue books exactly once (guarded
-    // by PlatformRevenue's unique transactionId index) — no new transaction.
+    // by PlatformRevenue's unique transactionId index) - no new transaction.
     let k = 0;
     const merged = failed.pawapay.transfers.map((t) =>
       t.status === "COMPLETED"
@@ -834,7 +834,7 @@ router.post(
 
 /**
  * POST /api/pricing/preview  (auth, member)
- * PURE fee-breakdown calculator — the single source of truth the UI shows
+ * PURE fee-breakdown calculator - the single source of truth the UI shows
  * BEFORE a member confirms a contribution / share-out / loan. NO side effects:
  * no DB writes, no PawaPay calls, no Transaction. It only runs the same pricing
  * functions the real routes use, with the same config.pricing values, so the
@@ -879,7 +879,7 @@ router.post(
       );
 
     if (kind === "contribution") {
-      // priceContribution does not throw on small amounts — no tooSmall case.
+      // priceContribution does not throw on small amounts - no tooSmall case.
       const { base, platformFee, depositAmount, feesCovered } = priceContribution(
         {
           base: amount,
@@ -914,7 +914,7 @@ router.post(
 
 // ─── REPORTS ────────────────────────────────────────────────────────────────
 
-/** GET /api/reports/:groupId (auth, member) — computed analytics for a group */
+/** GET /api/reports/:groupId (auth, member) - computed analytics for a group */
 router.get(
   "/reports/:groupId",
   requireAuth,
@@ -944,7 +944,7 @@ router.get(
   })
 );
 
-/** GET /api/groups/:groupId/savings-trend?months=6 (auth, member) —
+/** GET /api/groups/:groupId/savings-trend?months=6 (auth, member) -
  *  cumulative savings trend reconstructed from contribution transactions. */
 router.get(
   "/groups/:groupId/savings-trend",

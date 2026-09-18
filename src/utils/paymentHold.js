@@ -5,7 +5,7 @@
  * come in electronically but cannot go out the same way is worse than one that
  * runs on cash end to end: members' savings would be locked behind a payout
  * that never happens. So while the hold is on, every flow that moves MEMBER
- * money is cash — paid to, or handed out by, an admin who confirms it.
+ * money is cash - paid to, or handed out by, an admin who confirms it.
  *
  * Platform fees are the exception (group creation, the monthly group fee):
  * that money goes to the app, not between members, and it never needed a

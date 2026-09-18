@@ -5,16 +5,16 @@
  *
  * Self-contained: it imports only priceContribution and asserts the money
  * invariants across a spread of bases under both fee-billing modes. It touches
- * no DB, no config, no network — same purity contract as the module itself.
+ * no DB, no config, no network - same purity contract as the module itself.
  *
  * NOTE: the tiered `mnoFee` below is an ILLUSTRATIVE PLACEHOLDER only. These are
- * made-up bands for exercising the tier-crossing math — they are NOT real
+ * made-up bands for exercising the tier-crossing math - they are NOT real
  * Zambia / MNO rates. Real rates get injected from config in a later prompt.
  */
 
 import { priceContribution } from "../src/services/pricing.service.js";
 
-// ── Illustrative tiered MNO fee (PLACEHOLDER — not real rates) ───────────────
+// ── Illustrative tiered MNO fee (PLACEHOLDER - not real rates) ───────────────
 const mnoFee = (amount) => {
   if (amount <= 50) return 1;
   if (amount <= 100) return 2;
@@ -70,7 +70,7 @@ for (const base of BASES) {
           `pooled=${r.pooled} walletNet=${walletNet.toFixed(4)}`
       );
 
-      // 1. THE INVARIANT — pooled is EXACTLY base, every single case.
+      // 1. THE INVARIANT - pooled is EXACTLY base, every single case.
       check(`pooled===base (base=${base}, eou=${feesOnEndUser}, whole=${wholeKwachaOnly})`, r.pooled === base);
 
       // 4. Member is never charged less than what they owe.
@@ -94,7 +94,7 @@ for (const base of BASES) {
       }
 
       // 5. Whole-Kwacha rounding yields an integer deposit. This is defined as
-      //    the final step of the GROSS-UP path only — in fees-on-payer mode the
+      //    the final step of the GROSS-UP path only - in fees-on-payer mode the
       //    deposit passes through as exactly base+platformFee (assertion 2), so
       //    a fractional base+platformFee (e.g. 999.5+2) is intentionally NOT
       //    rounded there. Assert integer-ness only where the module guarantees it.
@@ -132,6 +132,6 @@ if (failures.length === 0) {
   console.log(`PASS (${passed}/${total})`);
   process.exit(0);
 } else {
-  console.log(`FAIL (${passed}/${total}) — ${failures.length} failed`);
+  console.log(`FAIL (${passed}/${total}) - ${failures.length} failed`);
   process.exit(1);
 }

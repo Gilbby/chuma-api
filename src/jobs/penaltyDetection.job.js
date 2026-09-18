@@ -5,8 +5,8 @@
  *
  * Auto-detects two violation classes across all groups and issues penalties via
  * the shared issuePenalty() service:
- *   A) Late contributions — members who missed a closed cycle window.
- *   B) Late loan repayments — active loans past their nextDueDate.
+ *   A) Late contributions - members who missed a closed cycle window.
+ *   B) Late loan repayments - active loans past their nextDueDate.
  *
  * Idempotent by design: issuePenalty() dedupes on dueContext, so running this
  * daily never stacks duplicate penalties for the same missed cycle or the same

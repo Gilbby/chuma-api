@@ -1,11 +1,11 @@
 import rateLimit from "express-rate-limit";
 
 /**
- * Rate limiters — the API's abuse and cost-control layer.
+ * Rate limiters - the API's abuse and cost-control layer.
  *
  * Two kinds of keys:
  *  - Per-IP (unauthenticated surface). Zambian carriers CGNAT heavily, so many
- *    legitimate users share one public IP — per-IP caps are set high enough
+ *    legitimate users share one public IP - per-IP caps are set high enough
  *    that a busy carrier NAT never throttles real users, while still stopping
  *    a single machine from hammering the API.
  *  - Per-user (authenticated surface). Keyed on req.userId, so they must be
@@ -18,7 +18,7 @@ import rateLimit from "express-rate-limit";
  * to a shared store (rate-limit-redis).
  */
 
-/** Global backstop for all /api routes. Generous — CGNAT-safe — but stops
+/** Global backstop for all /api routes. Generous - CGNAT-safe - but stops
  *  runaway clients and scripted hammering. Webhooks are exempt: PawaPay
  *  callbacks come from few IPs in bursts and are signature-verified. */
 export const apiLimiter = rateLimit({
@@ -52,7 +52,7 @@ export const otpVerifyLimiter = rateLimit({
 
 /** Money-movement initiations (PawaPay deposits/payouts), per user. Each call
  *  hits PawaPay and creates a pending Transaction that the reconciliation
- *  cron polls every 5 minutes until final — so spam here multiplies into
+ *  cron polls every 5 minutes until final - so spam here multiplies into
  *  ongoing API traffic. 15 per 15 min is far above any honest usage. */
 export const paymentLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -65,7 +65,7 @@ export const paymentLimiter = rateLimit({
   },
 });
 
-/** Group invites send an SMS each — per-user cap keeps an admin (or a stolen
+/** Group invites send an SMS each - per-user cap keeps an admin (or a stolen
  *  admin session) from draining SMS credit. */
 export const inviteLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,

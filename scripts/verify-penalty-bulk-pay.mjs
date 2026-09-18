@@ -3,18 +3,18 @@
 //
 // Exercises the REAL settlement service against real Mongo documents:
 //
-//   batch      — one "penalty" txn carrying meta.penaltyIds clears EVERY listed
+//   batch      - one "penalty" txn carrying meta.penaltyIds clears EVERY listed
 //                penalty (status → paid) and credits the pool by the sum of the
 //                group-pool ones ONLY. A welfare-account penalty is marked paid
 //                but must NOT reach walletBalance/totalSavings.
-//   replay     — settling the SAME txn again must not re-credit the pool: each
+//   replay     - settling the SAME txn again must not re-credit the pool: each
 //                penalty is claimed atomically (status ≠ paid), so a replayed
 //                callback finds nothing left to claim.
-//   partial    — a penalty already settled by another txn is skipped, while the
+//   partial    - a penalty already settled by another txn is skipped, while the
 //                rest of the batch still credits exactly once.
-//   legacy     — the old single-pay shape (meta.penaltyId) still settles, so
+//   legacy     - the old single-pay shape (meta.penaltyId) still settles, so
 //                transactions pending when the batch endpoint shipped drain fine.
-//   objectid   — meta.penaltyIds round-trips through the Mixed field and still
+//   objectid   - meta.penaltyIds round-trips through the Mixed field and still
 //                matches by _id after being read back from Mongo.
 //
 // Runs directly against the service (no HTTP); cleans up everything.
@@ -33,12 +33,12 @@ for (let i = 1; i <= 5 && !connected; i++) {
     await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 30000 });
     connected = true;
   } catch (e) {
-    console.log(`mongo connect attempt ${i} failed: ${e.message} — retrying in 10s`);
+    console.log(`mongo connect attempt ${i} failed: ${e.message} - retrying in 10s`);
     await new Promise((r) => setTimeout(r, 10000));
   }
 }
 if (!connected) {
-  console.error("Could not reach Mongo — network problem. Re-run later.");
+  console.error("Could not reach Mongo - network problem. Re-run later.");
   process.exit(2);
 }
 const { settleCompletedTransaction } = await import("../src/services/settlement.service.js");
@@ -48,7 +48,7 @@ const oid = () => new mongoose.Types.ObjectId();
 const results = [];
 const check = (name, cond, detail = "") => {
   results.push([name, cond]);
-  console.log(`${cond ? "PASS" : "FAIL"}: ${name}${cond ? "" : ` — ${detail}`}`);
+  console.log(`${cond ? "PASS" : "FAIL"}: ${name}${cond ? "" : ` - ${detail}`}`);
 };
 
 const groupId = oid();
@@ -59,7 +59,7 @@ const partialTxnId = oid();
 const now = new Date();
 
 // Three penalties: two routed to the group pool (K50 + K30 = K80 pooled),
-// one to the welfare account (K20 — paid, but never pooled).
+// one to the welfare account (K20 - paid, but never pooled).
 const penPool1 = oid();
 const penPool2 = oid();
 const penWelfare = oid();
@@ -121,7 +121,7 @@ console.log(`Seeded group ${groupId} with 6 penalties and 3 penalty transactions
 
 try {
   // ══ BATCH ═══════════════════════════════════════════════════════════════
-  // Read the txn back from Mongo — this is the object the callback path hands
+  // Read the txn back from Mongo - this is the object the callback path hands
   // to the service, and it proves meta.penaltyIds survives the Mixed round-trip.
   const txn = await db.collection("transactions").findOne({ _id: txnId });
   check("meta.penaltyIds survives the Mixed round-trip (3 ids read back)",
@@ -139,7 +139,7 @@ try {
   let g = await db.collection("groups").findOne({ _id: groupId });
   check("batch: pool credited by the GROUP-POOL sum only (walletBalance=80, not 100)",
     g.walletBalance === 80, `walletBalance=${g.walletBalance}`);
-  check("batch: totalSavings=80 — the welfare-account K20 did NOT reach the pool",
+  check("batch: totalSavings=80 - the welfare-account K20 did NOT reach the pool",
     g.totalSavings === 80, `totalSavings=${g.totalSavings}`);
 
   const welfare = await db.collection("penalties").findOne({ _id: penWelfare });
@@ -176,7 +176,7 @@ try {
   const partialB = await db.collection("penalties").findOne({ _id: penPartialB });
   check("partial: already-paid penalty A skipped, B still settled → paid",
     partialB.status === "paid", `B status=${partialB.status}`);
-  check("partial: pool credited by B ONLY (95 → 155, not 195 — A's K40 not re-credited)",
+  check("partial: pool credited by B ONLY (95 → 155, not 195 - A's K40 not re-credited)",
     g.walletBalance === 155, `walletBalance=${g.walletBalance}`);
 
   // ══ EMPTY META ══════════════════════════════════════════════════════════
@@ -189,7 +189,7 @@ try {
   await db.collection("groups").deleteOne({ _id: groupId });
   await db.collection("penalties").deleteMany({ groupId });
   await db.collection("transactions").deleteMany({ _id: { $in: [txnId, legacyTxnId, partialTxnId] } });
-  console.log("Cleanup done — synthetic penalty documents removed.");
+  console.log("Cleanup done - synthetic penalty documents removed.");
   await mongoose.disconnect();
 }
 

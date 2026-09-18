@@ -6,7 +6,7 @@
  * Sends a daily countdown notification to the chairperson and treasurer of any
  * group currently in its grace period (overdue on the monthly fee but not yet
  * locked). Locking itself is computed live by getGraceInfo()/isGroupLocked() on
- * every request, so this job never locks anything — it only reminds.
+ * every request, so this job never locks anything - it only reminds.
  */
 import { Group } from "../models/Group.js";
 import { getGraceInfo, getAmountOwed } from "../services/logic.service.js";

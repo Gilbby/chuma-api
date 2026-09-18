@@ -17,16 +17,16 @@ import {
  * come back to them. It runs in the same two legs as a share-out, for the same
  * reasons:
  *
- *   Leg A — any loan they still owe is cleared out of their own savings first
+ *   Leg A - any loan they still owe is cleared out of their own savings first
  *           (VSLA netting). No cash moves; the debt is offset against Leg B.
- *   Leg B — what is left is paid to their mobile wallet, and ONLY when that
+ *   Leg B - what is left is paid to their mobile wallet, and ONLY when that
  *           payout completes does the settlement service zero their savings and
  *           flip their row to "removed" (see the "withdrawal" branch there).
  *
  * Settling before removing is deliberate: a payout that fails leaves them a
  * member with their savings intact, never an ex-member the group still owes.
  *
- * Throws a 409 when the group's wallet cannot cover the refund — the caller
+ * Throws a 409 when the group's wallet cannot cover the refund - the caller
  * keeps the approval usable so admins can run it again once repayments land.
  */
 export async function refundAndRemoveMember(group, member, { approvalId } = {}) {
@@ -40,7 +40,7 @@ export async function refundAndRemoveMember(group, member, { approvalId } = {}) 
   const debt = openLoans.reduce((sum, l) => sum + (l.outstanding || 0), 0);
 
   // The payout draws on the merchant float, so refuse BEFORE any money moves or
-  // any loan is netted — a blocked refund must leave the member exactly as it
+  // any loan is netted - a blocked refund must leave the member exactly as it
   // found them. Netted debt needs no wallet cash, so only the cash that will
   // actually go out has to be covered.
   const wallet = group.walletBalance || 0;
@@ -53,7 +53,7 @@ export async function refundAndRemoveMember(group, member, { approvalId } = {}) 
     throw err;
   }
 
-  // Leg A — clear their own debt out of their own stake.
+  // Leg A - clear their own debt out of their own stake.
   let budget = savings;
   let appliedToLoan = 0;
   const netted = [];
@@ -90,7 +90,7 @@ export async function refundAndRemoveMember(group, member, { approvalId } = {}) 
   };
 
   // Nothing left to send (no savings, or the whole stake cleared their loan).
-  // Still book the exit so the settlement path — and only it — retires the row.
+  // Still book the exit so the settlement path - and only it - retires the row.
   if (cash <= 0) {
     const txn = await Transaction.create({
       groupId: group._id,
@@ -113,7 +113,7 @@ export async function refundAndRemoveMember(group, member, { approvalId } = {}) 
 
   // Mobile money on hold: the treasurer hands the leaving member their stake
   // in cash. No fees come off it, and the row retires as the record is written
-  // — there is no payout that could fail after the fact.
+  // - there is no payout that could fail after the fact.
   if (isMobileMoneyOnHold()) {
     const txn = await Transaction.create({
       groupId: group._id,
@@ -121,7 +121,7 @@ export async function refundAndRemoveMember(group, member, { approvalId } = {}) 
       memberId: member.userId,
       memberName: member.name,
       type: "withdrawal",
-      amount: savings, // full stake — what settlement removes from the pool
+      amount: savings, // full stake - what settlement removes from the pool
       depositAmount: cash, // what the member is handed
       platformFee: 0,
       paymentMethod: "Cash",
@@ -144,7 +144,7 @@ export async function refundAndRemoveMember(group, member, { approvalId } = {}) 
   }
 
   // Fees come out of what they receive, exactly as at share-out. pricePayout
-  // THROWS when the fees meet or exceed the amount — a stake too small to send
+  // THROWS when the fees meet or exceed the amount - a stake too small to send
   // must not strand the removal, so pay out nothing and retire the row.
   const correspondent = providerFromPhone(member.phone || "");
   let priced;
@@ -191,7 +191,7 @@ export async function refundAndRemoveMember(group, member, { approvalId } = {}) 
   });
 
   // A payout REJECTED at initiation never reaches PawaPay, so no callback or
-  // reconciliation will finalise it — fail it now (retryable via retry-payout)
+  // reconciliation will finalise it - fail it now (retryable via retry-payout)
   // and leave the member in the group until the money actually lands.
   const rejected = payout.status === "REJECTED";
   const txn = await Transaction.create({
@@ -200,7 +200,7 @@ export async function refundAndRemoveMember(group, member, { approvalId } = {}) 
     memberId: member.userId,
     memberName: member.name,
     type: "withdrawal",
-    amount: savings, // full stake — what settlement removes from the pool
+    amount: savings, // full stake - what settlement removes from the pool
     depositAmount: priced.netReceived, // what actually goes to their wallet
     platformFee: priced.platformFee,
     status: rejected ? "failed" : payout.simulated ? "completed" : "pending",

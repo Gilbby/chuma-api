@@ -77,6 +77,6 @@ if (failures.length === 0) {
   console.log(`PASS (${passed}/${total})`);
   process.exit(0);
 } else {
-  console.log(`FAIL (${passed}/${total}) — ${failures.length} failed`);
+  console.log(`FAIL (${passed}/${total}) - ${failures.length} failed`);
   process.exit(1);
 }

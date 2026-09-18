@@ -6,7 +6,7 @@ import config from "../config/index.js";
  *
  * When SMS_ENABLED=true and credentials are present, sends real SMS.
  * When SMS_ENABLED=false (default dev mode), logs the message to console
- * instead — so OTP and notifications work locally without spending credit.
+ * instead - so OTP and notifications work locally without spending credit.
  *
  * Sandbox testing:
  *   - Set AT_USERNAME=sandbox and AT_API_KEY to your sandbox key
@@ -50,7 +50,7 @@ export async function sendSms(to, message) {
 
   const client = getClient();
   if (!client) {
-    console.warn("[SMS] AT_API_KEY missing — cannot send. Logging instead.");
+    console.warn("[SMS] AT_API_KEY missing - cannot send. Logging instead.");
     console.log(`[SMS FALLBACK] → ${recipients.join(", ")}: ${message}`);
     return { sent: false, simulated: true };
   }
@@ -95,13 +95,13 @@ export async function sendSms(to, message) {
       .map((r) => `${r?.number} (${r?.status})`)
       .join(", ");
     console.warn(
-      `[SMS] NOT SENT — ${delivered}/${total} recipients succeeded. ` +
+      `[SMS] NOT SENT - ${delivered}/${total} recipients succeeded. ` +
         `Failed: ${failures || "(no recipients returned)"}`
     );
     return { sent: false, raw, recipients };
   } catch (err) {
     console.error(
-      `[SMS] SEND FAILED — message NOT delivered to ${recipients.join(", ")}:`,
+      `[SMS] SEND FAILED - message NOT delivered to ${recipients.join(", ")}:`,
       err?.message || err
     );
     return { sent: false, error: err?.message };

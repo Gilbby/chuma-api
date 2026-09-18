@@ -1,5 +1,5 @@
 /**
- * Business logic — ported directly from the Chuma frontend services so the
+ * Business logic - ported directly from the Chuma frontend services so the
  * backend produces identical numbers to what the app already shows.
  * Mirrors: shareOut.ts, loans.ts, groupFees.ts, trustScore.ts, penalties.ts,
  * groupStats.ts, approvals.ts
@@ -12,7 +12,7 @@ import config from "../config/index.js";
 /**
  * Types that collect toward NAMED PROJECTS instead of running a contribution
  * cycle. A church group takes whatever members choose to give, whenever they
- * give it, and spends it on the project it was given for — so there is no
+ * give it, and spends it on the project it was given for - so there is no
  * fixed amount, no frequency, no deadline, no late penalty, no internal
  * lending and no share-out. Every rule that keys off a cycle is skipped for
  * these; what they do have is `group.projects`.
@@ -151,7 +151,7 @@ export function checkEligibility(principal, maxLoan) {
   return { eligible: true };
 }
 
-// Fallback size-based repayment tiers (ZMW) for groups with none stored —
+// Fallback size-based repayment tiers (ZMW) for groups with none stored -
 // mirrors the app's default for a 6-month cycle (defaultTiersForCycle(6)). The
 // app sends cycle-tuned tiers on create; this is only a safety net, and the
 // per-loan cycle cap (getLoanTermConstraints) constrains the term either way.
@@ -225,14 +225,14 @@ export function getAmountOwed(group) {
  * True while a brand-new group is still waiting for its registration fee to
  * settle. The founder has been sent a mobile-money prompt but has not confirmed
  * it (or it failed), so the group exists only as a shell for that payment to
- * land against — every action inside it is refused until the deposit COMPLETES.
+ * land against - every action inside it is refused until the deposit COMPLETES.
  */
 export function isAwaitingFirstPayment(group) {
   return group?.status === "pending-payment";
 }
 
 export function getGraceInfo(group) {
-  // Nothing has ever been paid, so this is not a grace window — it is a group
+  // Nothing has ever been paid, so this is not a grace window - it is a group
   // that has not started yet. Reported separately so the client can say
   // "waiting for payment" instead of "your fee is overdue".
   if (isAwaitingFirstPayment(group)) {
@@ -281,7 +281,7 @@ export function advanceContributionDate(date, frequency) {
 
 /**
  * Returns the userIds of active members who did NOT record a completed/pending
- * "cycle" contribution within [windowStart, windowEnd]. Pure — no side effects.
+ * "cycle" contribution within [windowStart, windowEnd]. Pure - no side effects.
  * - Only type "contribution" with contributionType "cycle" counts (top-ups don't).
  * - "failed" transactions don't count as paid.
  * - Only members with status "active" and a userId are considered.
@@ -407,7 +407,7 @@ export function getDefaultRate(loans) {
  * their non-failed cycle contributions falls inside it (previous due date
  * exclusive → due date + grace period inclusive). Windows before a member
  * joined don't count against them; members with no completed windows yet get
- * rate: null so the UI can show "—" instead of a made-up number.
+ * rate: null so the UI can show "-" instead of a made-up number.
  */
 export function getMemberConsistency(group, transactions, { maxWindows = 12, now = new Date() } = {}) {
   const activeMembers = (group.members || []).filter(

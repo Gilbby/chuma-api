@@ -21,7 +21,7 @@ import { config } from "../config/index.js";
 const router = express.Router();
 
 const MAX_CHECKOUT = 1_000_000; // ZMW sanity cap on the grand total
-const MAX_ITEMS = 20; // per obligation kind — nobody legitimately owes hundreds
+const MAX_ITEMS = 20; // per obligation kind - nobody legitimately owes hundreds
 
 /**
  * POST /api/payments/checkout  (auth, member)
@@ -34,7 +34,7 @@ const MAX_ITEMS = 20; // per obligation kind — nobody legitimately owes hundre
  *
  * The whole grand total is priced ONCE through priceContribution, so the pool /
  * each loan / each penalty each receive their exact face amount and the platform
- * books one fee. Nothing is applied here — the "combined" branch of
+ * books one fee. Nothing is applied here - the "combined" branch of
  * settlement.service.js splits the deposit into every effect once it COMPLETES
  * (webhook / reconciliation / inline for simulated, or on cash confirmation).
  *
@@ -49,7 +49,7 @@ const MAX_ITEMS = 20; // per obligation kind — nobody legitimately owes hundre
  *   payerPhone?
  * }
  *
- * Every obligation must belong to the CALLER — this screen pays your own dues.
+ * Every obligation must belong to the CALLER - this screen pays your own dues.
  * Admin-on-behalf recording stays on the individual routes.
  */
 router.post(
@@ -140,7 +140,7 @@ router.post(
     }
 
     // ── Project-fund groups: the savings leg names the project it pays into ──
-    // Naming one is optional — a general offering is given to the church, not
+    // Naming one is optional - a general offering is given to the church, not
     // to any one thing, and shows as "General giving" on the statement. A
     // project that WAS named has to be able to take the money though: money
     // meant for the church building must not fall quietly into the pool.
@@ -170,7 +170,7 @@ router.post(
     const phone = payerPhone || req.user.phone;
     const isCash = paymentMethod === "Cash";
 
-    // Mobile money is on hold for member money — the whole checkout is cash.
+    // Mobile money is on hold for member money - the whole checkout is cash.
     const held = rejectIfMobileMoneyHeld(paymentMethod);
     if (held) return res.status(held.status).json(held.body);
 
@@ -185,7 +185,7 @@ router.post(
       wholeKwachaOnly: config.pricing.contributionWholeKwacha,
     });
     // Cash is collected at face value: nothing to gross up, and no platform fee
-    // we could take out of notes in a treasurer's hand — booking one would
+    // we could take out of notes in a treasurer's hand - booking one would
     // record revenue nobody ever received.
     const breakdown = isCash
       ? {
@@ -218,7 +218,7 @@ router.post(
         }`
       );
 
-    // Build and validate the full transaction BEFORE any money moves — PawaPay
+    // Build and validate the full transaction BEFORE any money moves - PawaPay
     // must never be told to collect for a request our own schema would reject.
     const txn = new Transaction({
       groupId,
@@ -226,7 +226,7 @@ router.post(
       memberId: req.userId,
       memberName: req.user.name,
       type: "combined",
-      amount: -grandBase, // BASE (pooled/applied) — money out of the member
+      amount: -grandBase, // BASE (pooled/applied) - money out of the member
       depositAmount: breakdown.depositAmount, // grossed-up total charged (face value for cash)
       platformFee: breakdown.platformFee, // platform revenue on this txn (never pooled)
       networkFee: breakdown.networkFee, // member's own MMO fee (display-only)
@@ -261,7 +261,7 @@ router.post(
     }
 
     // Balances/loans/penalties are only touched by the settlement service once
-    // the payment reaches COMPLETED — inline below for simulated payments, via
+    // the payment reaches COMPLETED - inline below for simulated payments, via
     // the webhook/cron for real ones, or on cash confirmation for Cash.
     await txn.save();
 
@@ -270,7 +270,7 @@ router.post(
     if (isCash) {
       // Same receipt flow as a plain cash contribution: an approval for the
       // group's record plus a notification to the treasurer, and nothing is
-      // applied — savings, repayments or penalties — until one of them says
+      // applied - savings, repayments or penalties - until one of them says
       // the money arrived.
       const approval = await raiseCashReceipt({
         group,

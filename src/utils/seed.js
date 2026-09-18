@@ -1,8 +1,8 @@
 /**
- * Seed script — clean slate for the invite-only launch.
+ * Seed script - clean slate for the invite-only launch.
  * Run with: npm run seed
  *
- * Creates ONLY the Gilbert user. No groups/members/loans/penalties —
+ * Creates ONLY the Gilbert user. No groups/members/loans/penalties -
  * groups are created in-app and users invited from there.
  */
 import "dotenv/config";
@@ -46,9 +46,9 @@ async function seed() {
     trustScore: 92,
   });
 
-  console.log("\n✓ Seed complete — clean slate");
+  console.log("\n✓ Seed complete - clean slate");
   console.log(`  User: Gilbert (+260975988642, PIN 1234)`);
-  console.log(`  No groups seeded — create one in-app and invite users.`);
+  console.log(`  No groups seeded - create one in-app and invite users.`);
 
   await mongoose.connection.close();
   process.exit(0);

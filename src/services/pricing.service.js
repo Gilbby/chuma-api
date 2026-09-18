@@ -1,5 +1,5 @@
 /**
- * Pricing — PURE money math for turning a UI contribution amount into the
+ * Pricing - PURE money math for turning a UI contribution amount into the
  * exact deposit we request from PawaPay.
  *
  * This module is deliberately dependency-free: no DB, no models, no config,
@@ -7,7 +7,7 @@
  * pawapayRate, mnoFee, feesOnEndUser, …) is INJECTED so the logic stays pure
  * and fully unit-testable. Config wiring happens elsewhere, later.
  *
- * THE INVARIANT: the pool always receives EXACTLY `base` — the amount the
+ * THE INVARIANT: the pool always receives EXACTLY `base` - the amount the
  * member typed. Fees and the platform charge never reduce what gets pooled.
  *
  * All internal arithmetic is done in integer ngwee (1 Kwacha = 100 ngwee) to
@@ -24,7 +24,7 @@ const toKwacha = (ngwee) => ngwee / 100;
 
 /**
  * A fee, in ngwee, rounded UP. We always over-estimate fees so the wallet is
- * never left short — solvency over exactness.
+ * never left short - solvency over exactness.
  */
 const feeNgweeCeil = (kwacha) => Math.ceil(kwacha * 100);
 
@@ -102,7 +102,7 @@ export function priceContribution({
     return depositNgwee - pawapayFeeNgwee - mnoFeeNgwee;
   };
 
-  // mnoFee is TIERED, so raising the deposit can raise the fee — this is
+  // mnoFee is TIERED, so raising the deposit can raise the fee - this is
   // circular. Iterate: add whatever we're short by, recompute, repeat.
   const MAX_ITERS = 50;
   let depositNgwee = netTargetNgwee;
@@ -151,11 +151,11 @@ export function priceContribution({
 
 /**
  * The REVERSE of priceContribution: pricing a PAYOUT (share-out or loan
- * disbursement). Here the member RECEIVES less than they are owed — every fee
+ * disbursement). Here the member RECEIVES less than they are owed - every fee
  * is deducted from `owed`, and the remainder is what we actually send.
  *
  * THE INVARIANT: netReceived + totalFees === owed, EXACTLY, in ngwee. Every
- * ngwee of `owed` is either sent to the member or accounted as a fee — nothing
+ * ngwee of `owed` is either sent to the member or accounted as a fee - nothing
  * is created or lost.
  *
  * @param {object}   p
@@ -202,7 +202,7 @@ export function pricePayout({
   const platformFeeNgwee = toNgwee(platformFee);
 
   // ── Transaction fee, computed on the OWED amount ──────────────────────────
-  // Each part rounded UP to ngwee (conservative — never under-charge the fee).
+  // Each part rounded UP to ngwee (conservative - never under-charge the fee).
   let transactionFeeNgwee;
   if (feesOnEndUser === true) {
     // PawaPay deducts its MNO+% fee on its own side; nothing to withhold here.
@@ -249,7 +249,7 @@ export function pricePayout({
 }
 
 /**
- * A payout where CHUMA absorbs the provider fees — the member receives EXACTLY
+ * A payout where CHUMA absorbs the provider fees - the member receives EXACTLY
  * `owed`.
  *
  * Used for loan disbursement: a member approved for K5,000 receives K5,000, and
@@ -260,13 +260,13 @@ export function pricePayout({
  *
  * When feesOnEndUser is false (Model B, the default) PawaPay does not deduct on
  * its own side, so sending `owed` delivers `owed`. When it is true PawaPay
- * deducts downstream and we cannot gross that up from here — which is why
+ * deducts downstream and we cannot gross that up from here - which is why
  * Model B is the default for disbursements.
  *
  * @param {object}   p
  * @param {number}   p.owed             What the member must receive (Kwacha, > 0).
  * @param {number}   p.platformFee      Flat platform charge (Kwacha, >= 0). NOT charged to
- *                                       the member here — passed back so the caller can
+ *                                       the member here - passed back so the caller can
  *                                       record the revenue forgone.
  * @param {number}   p.pawapayRate      PawaPay percentage fee, e.g. 0.01 for 1%.
  * @param {boolean}  p.feesOnEndUser    true = PawaPay bills its fee on its own side.
@@ -334,7 +334,7 @@ export function priceAbsorbedPayout({
   }
 
   // The platform's cash cost: provider fees, plus any whole-Kwacha rounding we
-  // handed to the member. platformFee is NOT added — it is revenue never
+  // handed to the member. platformFee is NOT added - it is revenue never
   // charged, not money leaving the wallet.
   const feesAbsorbedNgwee = transactionFeeNgwee + (sendNgwee - owedNgwee);
 

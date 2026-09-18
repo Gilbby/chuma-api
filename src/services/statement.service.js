@@ -4,7 +4,7 @@ import { generateReceiptId } from "../utils/helpers.js";
 import { isProjectFundGroup } from "./logic.service.js";
 
 /**
- * Member account statement — the bank-statement view of one member's money.
+ * Member account statement - the bank-statement view of one member's money.
  *
  * The only real "account" a member holds is their SAVINGS in a group, so that
  * is what carries the running balance. Savings move exactly where
@@ -42,7 +42,7 @@ export function savingsDelta(txn) {
  * Which way a movement runs on the GROUP's book.
  *
  * `amount` is signed from the MEMBER's wallet, and for most types the group's
- * book is its mirror — a contribution leaves the member and lands in the pool,
+ * book is its mirror - a contribution leaves the member and lands in the pool,
  * a loan leaves the pool and lands with the member.
  *
  * A fee is the one the mirror gets wrong. The member pays it, so it is money
@@ -52,7 +52,7 @@ export function savingsDelta(txn) {
  *
  * So this is stated per type rather than derived. Every type in the
  * Transaction enum is listed: "in" is a member paying the pool, "out" is the
- * pool paying someone — a member, or Chuma.
+ * pool paying someone - a member, or Chuma.
  */
 const GROUP_DIRECTION = {
   contribution: "in",
@@ -100,7 +100,7 @@ const TOLERANCE = 0.005; // sub-ngwee drift is rounding, not a missing leg
  *
  * A statement that says "money out K15,000" is a number, not an account: the
  * member paid one lump and cannot see that K14,860 of it became savings and
- * K140 cleared a penalty. Two types are lumps and get taken apart here —
+ * K140 cleared a penalty. Two types are lumps and get taken apart here -
  * everything else is already one purpose.
  *
  * Every leg is a positive magnitude, and the legs of a transaction always sum
@@ -126,7 +126,7 @@ export function purposeLegs(txn) {
     case "combined": {
       // One deposit settling several obligations. meta carries the savings and
       // loan legs outright; penalties are the remainder, because only their ids
-      // are stored — payment.routes.js builds the charge as
+      // are stored - payment.routes.js builds the charge as
       // contribution + topup + repayments + penalties.
       const savings = (Number(m.contribution) || 0) + (Number(m.topup) || 0);
       const repay = (m.repayments || []).reduce(
@@ -165,7 +165,7 @@ export function purposeLegs(txn) {
  * What one movement is called.
  *
  * `forGroup` is the officer's book, where every row belongs to a different
- * person — so the one label written in the second person ("disbursed to you")
+ * person - so the one label written in the second person ("disbursed to you")
  * has to drop it. The row already names who it was.
  */
 export function describe(txn, { forGroup = false } = {}) {
@@ -177,7 +177,7 @@ export function describe(txn, { forGroup = false } = {}) {
     case "combined":
       return "Contribution (part of combined payment)";
     case "share-out":
-      return "Cycle share-out — savings paid out";
+      return "Cycle share-out - savings paid out";
     case "loan":
       return forGroup ? "Loan disbursed" : "Loan disbursed to you";
     case "repayment":
@@ -198,7 +198,7 @@ export function describe(txn, { forGroup = false } = {}) {
  *
  * Loaded once and shared: both the per-project totals and the name on every
  * individual line need the same groups, and a statement should not fetch them
- * twice. Pending transactions count — a gift awaiting confirmation still names
+ * twice. Pending transactions count - a gift awaiting confirmation still names
  * the project it was meant for.
  */
 export async function loadProjectFunds(txns) {
@@ -221,7 +221,7 @@ export async function loadProjectFunds(txns) {
  * What to call one movement on a giving statement: the project the money was
  * paid to.
  *
- * "Payment" tells a church member nothing — they gave to a named thing and the
+ * "Payment" tells a church member nothing - they gave to a named thing and the
  * statement has to name it back. Nearly every gift arrives here as a `combined`
  * transaction, because the unified checkout books giving that way, so the type
  * alone can never supply a useful name. Only the project can.
@@ -230,7 +230,7 @@ export async function loadProjectFunds(txns) {
  * "Church building" against a payment that was half penalty is a lie, and the
  * member would be right to dispute the figure beside it.
  *
- * Returns null for a savings group and for anything that is not giving — a fee
+ * Returns null for a savings group and for anything that is not giving - a fee
  * or a penalty paid on its own keeps the wording the API already gives it.
  */
 export function projectLabelFor(funds, txn) {
@@ -248,7 +248,7 @@ export function projectLabelFor(funds, txn) {
   const project = m.projectId
     ? (group.projects || []).find((p) => String(p._id) === String(m.projectId))
     : null;
-  // Giving that names no project is still giving — see buildProjectGiving.
+  // Giving that names no project is still giving - see buildProjectGiving.
   const name = project?.name ?? "General giving";
 
   const alsoSettled =
@@ -266,8 +266,8 @@ export function projectLabelFor(funds, txn) {
  * these rows are built from the same settled movements as the savings ledger
  * and sum to the same `savingsIn`.
  *
- * Giving that names no project — made before the group opened one, or to a
- * project since archived away — lands under "General giving" rather than
+ * Giving that names no project - made before the group opened one, or to a
+ * project since archived away - lands under "General giving" rather than
  * disappearing. The rows have to add up to what the member actually gave, or
  * the itemisation is worse than none.
  *
@@ -308,7 +308,7 @@ function buildProjectGiving(txns, funds) {
     rows.set(key, row);
   }
 
-  // Largest gift first — the project they have backed most is the one they
+  // Largest gift first - the project they have backed most is the one they
   // opened the statement to check.
   return [...rows.values()]
     .map((r) => ({ ...r, amount: Math.round(r.amount * 100) / 100 }))
@@ -320,14 +320,14 @@ function buildProjectGiving(txns, funds) {
  *
  * `scope` decides WHOSE money it is:
  *
- *   "member" (default) — the caller's own account, optionally narrowed to
+ *   "member" (default) - the caller's own account, optionally narrowed to
  *                        one group. This is the statement every member can
  *                        pull.
- *   "group"            — the whole group's book: every member's movements in
+ *   "group"            - the whole group's book: every member's movements in
  *                        that group, so the balance is the group's pooled
  *                        savings rather than one person's stake. Needs a
  *                        groupId, and the route only lets an officer ask for
- *                        it — a member reading what everyone else paid is a
+ *                        it - a member reading what everyone else paid is a
  *                        different product, and not this one.
  *
  * Nothing else changes between the two: the same ledger, the same breakdown,
@@ -359,7 +359,7 @@ export async function buildStatement({ user, groupId, from, to, scope = "member"
     .lean();
   const openingBalance = priorTxns.reduce((sum, t) => sum + savingsDelta(t), 0);
 
-  // Everything inside the period, oldest first — a statement reads forwards.
+  // Everything inside the period, oldest first - a statement reads forwards.
   const txns = await Transaction.find({
     ...who,
     date: { $gte: from, $lte: to },
@@ -385,7 +385,7 @@ export async function buildStatement({ user, groupId, from, to, scope = "member"
     const signed = Number(t.amount) || 0;
     // A member's own statement reads off their wallet; the group's book reads
     // off the pool, which is a different question with a different answer for
-    // every row — see GROUP_DIRECTION. The mirror is the fallback for a type
+    // every row - see GROUP_DIRECTION. The mirror is the fallback for a type
     // added to the model but not yet to that table.
     const memberSide = signed >= 0 ? "in" : "out";
     const direction = forGroup
@@ -495,7 +495,7 @@ export async function buildStatement({ user, groupId, from, to, scope = "member"
       ? {
           id: String(g._id),
           name: g.name,
-          // The client words the whole statement off this — savings or giving.
+          // The client words the whole statement off this - savings or giving.
           groupType: g.groupType,
           role: me?.role ?? "Member",
         }
@@ -528,7 +528,7 @@ export async function buildStatement({ user, groupId, from, to, scope = "member"
  *
  * The type alone is not a name a member recognises. Nearly every payment the
  * unified checkout produces is stored as `combined`, so a client rendering
- * `txn.type` shows people the word "Combined" for the thing they just paid —
+ * `txn.type` shows people the word "Combined" for the thing they just paid -
  * which is why the transaction lists needed this and the statement already had
  * it. Both now read the same two fields, so a payment cannot be called one
  * thing in Recent activity and another on the statement.

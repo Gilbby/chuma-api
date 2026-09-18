@@ -30,12 +30,12 @@ for (let i = 1; i <= 5 && !connected; i++) {
     await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 30000 });
     connected = true;
   } catch (e) {
-    console.log(`mongo connect attempt ${i} failed: ${e.message} — retrying in 10s`);
+    console.log(`mongo connect attempt ${i} failed: ${e.message} - retrying in 10s`);
     await new Promise((r) => setTimeout(r, 10000));
   }
 }
 if (!connected) {
-  console.error("Could not reach Atlas — network problem. Re-run later.");
+  console.error("Could not reach Atlas - network problem. Re-run later.");
   process.exit(2);
 }
 const db = mongoose.connection.db;
@@ -86,7 +86,7 @@ await db.collection("transactions").insertOne({
   note: "Seeded history", receiptId: "CHM-VERIFY-HIST",
   date: now, createdAt: now, updatedAt: now,
 });
-console.log(`Seeded group ${groupId} — removing ${TARGET.name} (row ${rowX}, K${TARGET.savings} saved)`);
+console.log(`Seeded group ${groupId} - removing ${TARGET.name} (row ${rowX}, K${TARGET.savings} saved)`);
 
 let approvalId = null;
 try {
@@ -106,7 +106,7 @@ try {
   const prop = await propRes.json();
   approvalId = prop.approval?._id;
   check("removal proposed", propRes.status === 200 && !!approvalId);
-  // Voters are the admins — Gilbert + the Treasurer. Majority of 2 = 2.
+  // Voters are the admins - Gilbert + the Treasurer. Majority of 2 = 2.
   check("quorum is the group's admins", prop.eligibleVoters === 2 && prop.requiredApprovals === 2);
   check("refund quoted as their full stake", prop.refund === TARGET.savings);
 
@@ -161,7 +161,7 @@ try {
   check("refund payout COMPLETED",
     txn?.status === "completed" && txn?.pawapay?.status === "COMPLETED");
 
-  // Settlement effects land just after the txn flips — poll for final state.
+  // Settlement effects land just after the txn flips - poll for final state.
   let g = null;
   const t1 = Date.now();
   while (Date.now() - t1 < 60 * 1000) {
@@ -187,7 +187,7 @@ try {
   check("their transactions stay in the group ledger", history === 1);
 
   const approval = await db.collection("approvals").findOne({ _id: oid(approvalId) });
-  check("approval consumed (status executed — cannot refund twice)",
+  check("approval consumed (status executed - cannot refund twice)",
     approval?.status === "executed");
 
   // ── An already-removed member cannot be proposed again ──
@@ -203,7 +203,7 @@ try {
   await db.collection("platformrevenues").deleteMany({ groupId });
   await db.collection("groups").deleteOne({ _id: groupId });
   await db.collection("users").deleteMany({ _id: { $in: [idT, idX] } });
-  console.log("Cleanup done — synthetic group/users/txns/approvals/notifications removed.");
+  console.log("Cleanup done - synthetic group/users/txns/approvals/notifications removed.");
   await mongoose.disconnect();
 }
 

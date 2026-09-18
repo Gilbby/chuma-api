@@ -6,18 +6,18 @@ const bool = (v, def = false) =>
 const num = (v, def) => (v === undefined ? def : Number(v));
 
 /**
- * Fees (Zambia) — pawaPay MERCHANT charges (per pawapay.io/fees) plus our 1%
+ * Fees (Zambia) - pawaPay MERCHANT charges (per pawapay.io/fees) plus our 1%
  * platform. TOTAL charge = pawaPay's fee + 1% platform. This is the ONE place
- * fee bands live — tune here, never in the routes. Everything is per-operator,
+ * fee bands live - tune here, never in the routes. Everything is per-operator,
  * keyed by the PawaPay correspondent code providerFromPhone() returns.
  *
  *   • Collections (money IN): pawaPay charges a flat MMO fee (per operator) + 1%.
  *       mnoFee = collectionFeeFor(correspondent);  pawapayRate = 1% (collections).
  *   • Disbursements (money OUT): Airtel = 1%; MTN = 2% + e-levy; Zamtel = 2%.
  *       pawapayRate = payoutRateFor(correspondent) (1% Airtel / 2% MTN & Zamtel);
- *       mnoFee = payoutLevyFor(correspondent) — the e-levy, MTN ONLY (0 otherwise).
+ *       mnoFee = payoutLevyFor(correspondent) - the e-levy, MTN ONLY (0 otherwise).
  *   • pawaPay also lists a separate "fees paid by your customers" (a small MMO
- *     charge the member's OWN wallet bears) — NOT included here: it doesn't reduce
+ *     charge the member's OWN wallet bears) - NOT included here: it doesn't reduce
  *     our settlement, it's the member's direct cost. See note if we ever surface it.
  *
  * Payout receive ceiling: an account can't receive more than PAYOUT_CEILING in
@@ -25,7 +25,7 @@ const num = (v, def) => (v === undefined ? def : Number(v));
  * is per-TRANSACTION, so on a split payout it STACKS per chunk; the % base is
  * linear (handled by pawapayRate) and needs no stacking.
  *
- * ⚠️ pawapay.io/fees is pawaPay's STANDARD public pricing — confirm against your
+ * ⚠️ pawapay.io/fees is pawaPay's STANDARD public pricing - confirm against your
  *    merchant dashboard's active rates before go-live.
  */
 
@@ -75,7 +75,7 @@ const collectionFeeFor = (correspondent) => {
 
 // ── "Fees paid by your customers": the MMO's OWN charge to the MEMBER's wallet
 // on a COLLECTION (money in), separate from our merchant fee above. We never
-// collect it — it's shown to the member as a heads-up (receipt / review tab).
+// collect it - it's shown to the member as a heads-up (receipt / review tab).
 // Disbursements are "No fees" to receive, so this only applies to money IN.
 const AIRTEL_CUSTOMER_COLLECTION = [
   { upTo: 500, fee: 2 },
@@ -106,7 +106,7 @@ const CUSTOMER_COLLECTION_BY_OPERATOR = {
 };
 
 // The member's OWN network fee on a contribution/repayment (money in), charged
-// to their wallet by their MMO. Display-only — NOT part of what we charge.
+// to their wallet by their MMO. Display-only - NOT part of what we charge.
 const customerFeeFor = (correspondent) => {
   const bands = CUSTOMER_COLLECTION_BY_OPERATOR[correspondent] || MTN_CUSTOMER_COLLECTION;
   return (amount) => bandFee(bands, amount);
@@ -122,7 +122,7 @@ const PAYOUT_RATE_BY_OPERATOR = {
 const payoutRateFor = (correspondent) => PAYOUT_RATE_BY_OPERATOR[correspondent] ?? 0.02;
 
 // MTN e-levy, charged per transaction on disbursements (Airtel has none). Caps at
-// K8 — the bandFee fallback returns the top band for anything above K10,000.
+// K8 - the bandFee fallback returns the top band for anything above K10,000.
 const MTN_PAYOUT_LEVY = [
   { upTo: 150, fee: 0.32 },
   { upTo: 300, fee: 0.4 },
@@ -139,7 +139,7 @@ const PAYOUT_CEILING = num(process.env.PAYOUT_CEILING, 20000);
 
 // mnoFee for a DISBURSEMENT: the e-levy. Per pawaPay, ONLY MTN payouts carry it;
 // Airtel (1%) and Zamtel (2%) have none. Per-transaction, so above the receive
-// ceiling it STACKS per chunk — matching how the payout is actually split. The %
+// ceiling it STACKS per chunk - matching how the payout is actually split. The %
 // base (pawapayRate) is linear, so it is NOT stacked here.
 const payoutLevyFor = (correspondent) => {
   const hasLevy = correspondent === "MTN_MOMO_ZMB"; // e-levy on MTN payouts only
@@ -195,8 +195,8 @@ export const config = {
 
   // App-store reviewer demo login. Google Play and Apple reviewers cannot
   // receive a Zambian SMS OTP, so when BOTH of these are set, this exact phone
-  // number accepts this exact code in the normal OTP flow — no SMS is sent and
-  // no code is stored — and signs in a persistent demo account. It is inert
+  // number accepts this exact code in the normal OTP flow - no SMS is sent and
+  // no code is stored - and signs in a persistent demo account. It is inert
   // unless both are provided, so environments that omit them have no bypass.
   // Document the pair in Play "App access" and Apple "App Review Information".
   review: {
@@ -232,7 +232,7 @@ export const config = {
   // savings, loan repayments, loan disbursement, penalties, share-outs and
   // exit refunds all move as CASH, confirmed by an admin.
   //
-  // Platform fees stay on pawaPay — group creation and the monthly group fee
+  // Platform fees stay on pawaPay - group creation and the monthly group fee
   // are the app being paid, not members paying each other, and they never
   // needed a payout to work. Set MOBILE_MONEY_HOLD=false to lift the hold; no
   // other change is needed.
@@ -261,8 +261,8 @@ export const config = {
   },
 
   pricing: {
-    platformFee: num(process.env.PLATFORM_FEE, 2), // flat — loan-disbursement absorb path
-    platformRate: platformFeeRate, // our platform percentage (1%) — both flows
+    platformFee: num(process.env.PLATFORM_FEE, 2), // flat - loan-disbursement absorb path
+    platformRate: platformFeeRate, // our platform percentage (1%) - both flows
     platformFeeFor, // (amount) => our 1% platform fee
     pawapayRate: num(process.env.PAWAPAY_RATE, 0.01), // pawaPay % on COLLECTIONS (1%)
     feesOnEndUser: bool(process.env.PAWAPAY_FEES_ON_END_USER, false), // Model B default
@@ -285,7 +285,7 @@ export const config = {
     groupMonthlyFee: num(process.env.GROUP_MONTHLY_FEE, 100),
     graceDays: num(process.env.GROUP_FEE_GRACE_DAYS, 5),
     // A founder pays a monthly fee per group, so the cap is anti-abuse, not
-    // a product limit — it stops one account spinning up endless groups.
+    // a product limit - it stops one account spinning up endless groups.
     maxGroupsFounded: num(process.env.MAX_GROUPS_FOUNDED, 5),
     currency: process.env.CURRENCY || "ZMW",
     country: process.env.COUNTRY || "ZMB",
@@ -296,7 +296,7 @@ export const config = {
     .map((s) => s.trim()),
 };
 
-// Refuse to start in production with insecure defaults — a forged JWT or an
+// Refuse to start in production with insecure defaults - a forged JWT or an
 // open CORS policy is unrecoverable once real money is moving.
 if (config.env === "production") {
   const fatal = [];

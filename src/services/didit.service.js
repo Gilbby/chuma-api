@@ -5,7 +5,7 @@ import config from "../config/index.js";
 /**
  * Didit.me identity verification (KYC).
  *
- * The app never calls Didit directly — this service is the ONLY place the Didit
+ * The app never calls Didit directly - this service is the ONLY place the Didit
  * API key is used. It creates hosted verification sessions, reads decisions, and
  * verifies webhook signatures. See ../../.. frontend docs/didit-kyc.md.
  *
@@ -66,12 +66,12 @@ export async function createSession({ userId, returnUrl }) {
   try {
     ({ data } = await client().post("/v3/session/", payload));
   } catch (err) {
-    // Surface Didit's actual rejection reason — a bare "status code 400" is
+    // Surface Didit's actual rejection reason - a bare "status code 400" is
     // useless. Common causes: stale workflow_id (edited/recreated workflow) or a
     // callback URL Didit won't accept (e.g. a non-http app deep link).
     const detail = err.response?.data;
     console.error(
-      `[DIDIT] session create ${err.response?.status || ""} — ` +
+      `[DIDIT] session create ${err.response?.status || ""} - ` +
         `workflow_id=${config.didit.workflowId} callback=${returnUrl} ` +
         `detail=${detail ? JSON.stringify(detail) : err.message}`
     );

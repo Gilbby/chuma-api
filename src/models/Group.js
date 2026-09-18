@@ -49,7 +49,7 @@ const penaltyRuleSchema = new Schema(
   { _id: false }
 );
 
-// A named thing the group is collecting money for — "Church building",
+// A named thing the group is collecting money for - "Church building",
 // "Mission trip". Project-fund groups (church) contribute toward one of these
 // instead of a fixed cycle amount, so every contribution names the project it
 // pays into and `collected` is the running total settled against it.
@@ -163,7 +163,7 @@ const groupSchema = new Schema(
 
     members: [memberSchema],
 
-    // Named savings projects. Project-fund types (church — see
+    // Named savings projects. Project-fund types (church - see
     // PROJECT_FUND_TYPES in logic.service.js) must have at least one from
     // creation; every other type leaves this empty.
     projects: [projectSchema],
@@ -184,7 +184,7 @@ const groupSchema = new Schema(
     // "pending-payment" is where every new group starts: the registration fee
     // has been requested from the founder's wallet but the mobile-money PIN has
     // not been confirmed yet. The group exists so the fee has something to
-    // settle against, but nobody can use it until the deposit COMPLETES —
+    // settle against, but nobody can use it until the deposit COMPLETES -
     // see isAwaitingFirstPayment / isGroupLocked in logic.service.js.
     status: {
       type: String,

@@ -1,4 +1,4 @@
-// Manual KYC approval — the background backstop for when Didit auto-declines a
+// Manual KYC approval - the background backstop for when Didit auto-declines a
 // document it can't read (e.g. the old laminated Zambian NRC back). No Didit
 // console visit needed: this flips the user to verified directly in the DB and
 // clears their standing "verify your identity" nudge, so they regain access to
@@ -53,7 +53,7 @@ async function main() {
     }).select("name phone kyc.status kyc.sessionId");
 
     if (!pending.length) {
-      console.log("No users awaiting KYC — everyone is verified.");
+      console.log("No users awaiting KYC - everyone is verified.");
     } else {
       console.log(`${pending.length} user(s) not verified:\n`);
       for (const u of pending) {
@@ -92,7 +92,7 @@ async function main() {
   });
 
   console.log(
-    `✔ Approved ${user.name} (${user.phone}) — kyc.status ${before} → verified` +
+    `✔ Approved ${user.name} (${user.phone}) - kyc.status ${before} → verified` +
       (removed.deletedCount ? `, cleared ${removed.deletedCount} nudge(s)` : "")
   );
 }

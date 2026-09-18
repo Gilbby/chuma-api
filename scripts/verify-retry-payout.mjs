@@ -15,7 +15,7 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
 
 const GROUP_ID = "6a47ce19b993fc0dbfd4c379";
-const USER_ID = "6a47cb8be9d07482567dfcc0"; // Gilbert — Chairperson of TEST
+const USER_ID = "6a47cb8be9d07482567dfcc0"; // Gilbert - Chairperson of TEST
 const API = "http://localhost:5000";
 const AMOUNT = 1;
 
@@ -26,12 +26,12 @@ for (let i = 1; i <= 5 && !connected; i++) {
     await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 30000 });
     connected = true;
   } catch (e) {
-    console.log(`mongo connect attempt ${i} failed: ${e.message} — retrying in 10s`);
+    console.log(`mongo connect attempt ${i} failed: ${e.message} - retrying in 10s`);
     await new Promise((r) => setTimeout(r, 10000));
   }
 }
 if (!connected) {
-  console.error("Could not reach Atlas — network problem. Re-run later.");
+  console.error("Could not reach Atlas - network problem. Re-run later.");
   process.exit(2);
 }
 const db = mongoose.connection.db;
@@ -77,7 +77,7 @@ try {
       console.log(`retry attempt ${attempt}: ${status} ${JSON.stringify(body).slice(0, 140)}`);
       if (status !== 402) break;
     } catch (e) {
-      console.log(`retry attempt ${attempt}: fetch error ${e.message} — is the backend running?`);
+      console.log(`retry attempt ${attempt}: fetch error ${e.message} - is the backend running?`);
     }
     await new Promise((r) => setTimeout(r, 8000));
   }
@@ -119,7 +119,7 @@ try {
         ga.loanCirculation === groupBefore.loanCirculation + AMOUNT &&
         ga.walletBalance === groupBefore.walletBalance - AMOUNT);
     } else if (finalStatus === "failed") {
-      console.log("Payout FAILED at provider — verifying failure path.");
+      console.log("Payout FAILED at provider - verifying failure path.");
       check("loan stays pending on failed retry", loanAfter.status === "pending");
       const notif = await db.collection("notifications").findOne(
         { transactionId: oid(retryTxnId) }, { sort: { createdAt: -1 } });
@@ -142,7 +142,7 @@ try {
       { arrayFilters: [{ "m.userId": oid(USER_ID) }] }
     );
   }
-  console.log("Cleanup done — synthetic loan/txns/notifications removed.");
+  console.log("Cleanup done - synthetic loan/txns/notifications removed.");
   await mongoose.disconnect();
 }
 

@@ -1,21 +1,21 @@
 /**
- * Standalone PASS/FAIL harness for pricePayout — the PURE payout money math.
+ * Standalone PASS/FAIL harness for pricePayout - the PURE payout money math.
  *
  *   npm run verify:payout-pricing
  *
  * Self-contained: imports only pricePayout and asserts the payout invariants
  * across a spread of owed amounts under both fee-billing modes and both
- * whole-Kwacha settings. It touches no DB, no config, no network — same purity
+ * whole-Kwacha settings. It touches no DB, no config, no network - same purity
  * contract as the module itself.
  *
  * NOTE: the tiered `mnoFee` below is an ILLUSTRATIVE PLACEHOLDER only. These are
- * made-up bands for exercising the deduction math — they are NOT real Zambia /
+ * made-up bands for exercising the deduction math - they are NOT real Zambia /
  * MNO rates. Real rates get injected from config in a later prompt.
  */
 
 import { pricePayout } from "../src/services/pricing.service.js";
 
-// ── Illustrative tiered MNO fee (PLACEHOLDER — not real rates) ───────────────
+// ── Illustrative tiered MNO fee (PLACEHOLDER - not real rates) ───────────────
 const mnoFee = (amount) => {
   if (amount <= 50) return 1;
   if (amount <= 100) return 2;
@@ -26,7 +26,7 @@ const mnoFee = (amount) => {
 
 const PLATFORM_FEE = 2; // K2
 const PAWAPAY_RATE = 0.01; // 1%
-const OWEDS = [100, 1000, 50, 3]; // 3 is deliberately tiny — fees exceed it in gross mode
+const OWEDS = [100, 1000, 50, 3]; // 3 is deliberately tiny - fees exceed it in gross mode
 
 // ── tiny assert helpers ──────────────────────────────────────────────────────
 let passed = 0;
@@ -63,7 +63,7 @@ for (const owed of OWEDS) {
           wholeKwachaOnly,
         });
       } catch (e) {
-        // Only tiny payouts whose fees meet/exceed `owed` may throw — expected,
+        // Only tiny payouts whose fees meet/exceed `owed` may throw - expected,
         // asserted explicitly below. Log and move on; nothing to price here.
         console.log(`${tag} → THROWS (${e.message})`);
         continue;
@@ -74,7 +74,7 @@ for (const owed of OWEDS) {
           `totalFees=${r.totalFees} netReceived=${r.netReceived}`
       );
 
-      // 1. THE INVARIANT — netReceived + totalFees === owed, EXACTLY, in ngwee.
+      // 1. THE INVARIANT - netReceived + totalFees === owed, EXACTLY, in ngwee.
       check(`invariant net+fees===owed (${tag})`,
         ng(r.netReceived) + ng(r.totalFees) === ng(owed));
 
@@ -123,6 +123,6 @@ if (failures.length === 0) {
   console.log(`PASS (${passed}/${total})`);
   process.exit(0);
 } else {
-  console.log(`FAIL (${passed}/${total}) — ${failures.length} failed`);
+  console.log(`FAIL (${passed}/${total}) - ${failures.length} failed`);
   process.exit(1);
 }

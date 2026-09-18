@@ -7,5 +7,5 @@ npm-debug.log*
 dist/
 coverage/
 
-# markdown docs (not used by the app — README, docs, etc.)
+# markdown docs (not used by the app - README, docs, etc.)
 *.md

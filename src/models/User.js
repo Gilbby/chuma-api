@@ -13,7 +13,7 @@ const userSchema = new Schema(
     avatar: { type: String },
     joinedDate: { type: Date, default: Date.now },
 
-    // KYC — verified via Didit.me (see services/didit.service.js)
+    // KYC - verified via Didit.me (see services/didit.service.js)
     kyc: {
       provider: { type: String }, // "didit" | "didit-sim"
       sessionId: { type: String, index: true }, // Didit session id
@@ -25,7 +25,7 @@ const userSchema = new Schema(
       nrcNumber: { type: String }, // legacy manual-entry field
       photoUrl: { type: String }, // legacy manual-entry field
       decisionAt: { type: Date },
-      // Set true for accounts created via app signup — these must complete KYC
+      // Set true for accounts created via app signup - these must complete KYC
       // before entering the app (hard gate). Users seeded/added directly (no
       // flag) keep full access and only get the soft verification nudge.
       // Deprecated: KYC is now just-in-time, so nothing reads this. Kept so

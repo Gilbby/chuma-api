@@ -47,13 +47,13 @@ const router = express.Router();
 // control, not an invite.
 const INVITABLE_ROLES = ["Member", "Treasurer", "Secretary"];
 
-// A group cannot list an unbounded number of projects — each one is a picker
+// A group cannot list an unbounded number of projects - each one is a picker
 // row on every contribution screen.
 const MAX_PROJECTS = 30;
 
 /**
  * Normalise one client-supplied project into what the schema stores. Returns
- * null when the name is missing/blank — the caller decides whether that is an
+ * null when the name is missing/blank - the caller decides whether that is an
  * error or a row to skip. `targetAmount` and `deadline` are both optional:
  * anything not a positive number becomes null ("no goal set"), and anything
  * that is not a usable date becomes null ("collect for as long as it takes").
@@ -90,11 +90,11 @@ function withFeeStatus(group) {
 }
 
 /**
- * GET /api/groups  (auth) — groups the user belongs to
+ * GET /api/groups  (auth) - groups the user belongs to
  *
  * Closed (deleted) groups are left out: they are gone as far as saving,
  * lending and every picker is concerned. `?includeClosed=true` puts them back
- * for the screens whose job is the past — a statement of a group that ended
+ * for the screens whose job is the past - a statement of a group that ended
  * last year still has to be reachable.
  */
 router.get(
@@ -111,7 +111,7 @@ router.get(
 );
 
 /**
- * GET /api/groups/invites  (auth) — invitations still waiting on this user.
+ * GET /api/groups/invites  (auth) - invitations still waiting on this user.
  *
  * The source of truth for a pending invitation is the group's own member row,
  * NOT the invite notification. Notifications get marked read (by opening the
@@ -180,7 +180,7 @@ router.get(
 );
 
 /**
- * POST /api/groups/:id/projects  (auth, Chairperson) — add a savings project.
+ * POST /api/groups/:id/projects  (auth, Chairperson) - add a savings project.
  * Body: { name, targetAmount?, deadline? }
  *
  * Only the Chairperson may open a new project: it decides what members'
@@ -248,7 +248,7 @@ router.post(
 );
 
 /**
- * PATCH /api/groups/:id/projects/:projectId  (auth, Chairperson) — edit a
+ * PATCH /api/groups/:id/projects/:projectId  (auth, Chairperson) - edit a
  * savings project. Body: { name?, targetAmount?, deadline? }
  *
  * The same three fields the project was created with, and nothing else:
@@ -356,7 +356,7 @@ router.patch(
 );
 
 /**
- * POST /api/groups  (auth) — create a group.
+ * POST /api/groups  (auth) - create a group.
  * Charges month 1 of the monthly fee (K100) via PawaPay deposit from the
  * creator's wallet. Group goes live once payment is ACCEPTED.
  *
@@ -377,7 +377,7 @@ router.post(
     const now = new Date();
     const feeDueDay = now.getDate() > 28 ? 28 : now.getDate();
 
-    // Anyone verified may found a group — the creator becomes its Chairperson,
+    // Anyone verified may found a group - the creator becomes its Chairperson,
     // so there is no prior role to require. Cap how many they can run at once:
     // the client can be bypassed, the fee only bites after the group exists.
     const founded = await Group.countDocuments({
@@ -431,7 +431,7 @@ router.post(
         }
       : body.constitution || {};
 
-    // Optional co-admins named at creation — treasurer & secretary. Each becomes
+    // Optional co-admins named at creation - treasurer & secretary. Each becomes
     // a PENDING member with their role and gets an invite notification + SMS,
     // exactly like the /invite endpoint. Without this the phones were stored in
     // governance and never turned into an actual invite (no member, no SMS).
@@ -449,7 +449,7 @@ router.post(
       coAdminInvites.push({ normalized, role, invited });
     }
 
-    // Build and validate the group BEFORE charging the creator — PawaPay must
+    // Build and validate the group BEFORE charging the creator - PawaPay must
     // never collect the fee for a group our own schema would reject (bad
     // groupType, missing name, …), which would orphan the deposit.
     const group = new Group({
@@ -478,10 +478,10 @@ router.post(
       monthlyFee: fee,
       feeDueDay,
       // Month 1 is only marked paid when the fee payment settles; until then
-      // the group sits at the start of its grace window (5 days — far longer
+      // the group sits at the start of its grace window (5 days - far longer
       // than a callback takes).
       feePaidThrough: now,
-      // Nobody can open or use the group until the fee deposit COMPLETES —
+      // Nobody can open or use the group until the fee deposit COMPLETES -
       // settlement.service.js flips this to "active". Until then the founder
       // can only view it and retry the payment.
       status: "pending-payment",
@@ -521,7 +521,7 @@ router.post(
     });
     await feeTxn.validate();
 
-    // Everything checks out — now charge month 1 fee from the creator.
+    // Everything checks out - now charge month 1 fee from the creator.
     const deposit = await initiateDeposit({
       amount: fee,
       phone: payerPhone,
@@ -557,7 +557,7 @@ router.post(
       });
     }
 
-    // 201 with a group the client must NOT treat as usable — it has to wait for
+    // 201 with a group the client must NOT treat as usable - it has to wait for
     // feeTransaction to reach "completed" before opening the dashboard.
     res.status(201).json({
       group: withFeeStatus(group),
@@ -567,7 +567,7 @@ router.post(
 );
 
 /**
- * POST /api/groups/:id/invite  (auth, admin) — invite by phone number.
+ * POST /api/groups/:id/invite  (auth, admin) - invite by phone number.
  * Creates a pending member + invite notification + SMS.
  * Body: { phone, role? }
  */
@@ -680,7 +680,7 @@ router.post(
 );
 
 /**
- * POST /api/groups/:id/invite/:memberId/resend  (auth, admin) — resend a
+ * POST /api/groups/:id/invite/:memberId/resend  (auth, admin) - resend a
  * pending invite. The first SMS can be missed (phone off, wrong number typed,
  * carrier drop), and until now the only path back was /invite, which refuses a
  * number that is already pending. This re-sends the SMS and, if the invitee has
@@ -757,7 +757,7 @@ router.post(
 );
 
 /**
- * DELETE /api/groups/:id/invite/:memberId  (auth, admin) — cancel a pending
+ * DELETE /api/groups/:id/invite/:memberId  (auth, admin) - cancel a pending
  * invite. Only pending rows can be cancelled; an active member is removed
  * through the member-removal flow, not here.
  */
@@ -797,7 +797,7 @@ router.delete(
 );
 
 /**
- * POST /api/groups/:id/accept  (auth) — accept a pending invite.
+ * POST /api/groups/:id/accept  (auth) - accept a pending invite.
  */
 router.post(
   "/:id/accept",
@@ -812,7 +812,7 @@ router.post(
         m.phone === req.user.phone
     );
 
-    // A stale invite notification can outlive the invite itself — the user may
+    // A stale invite notification can outlive the invite itself - the user may
     // have already joined from another device, or been added directly. Accepting
     // again is a no-op success so the notification can be cleared, not an error.
     if (mine.some((m) => m.status === "active"))
@@ -822,7 +822,7 @@ router.post(
         group: withFeeStatus(group),
       });
 
-    // Only a PENDING invite can be accepted — a member removed by the group's
+    // Only a PENDING invite can be accepted - a member removed by the group's
     // admins must be re-invited, not re-activate themselves.
     const member = mine.find((m) => m.status === "pending");
     if (!member)
@@ -873,7 +873,7 @@ router.post(
 );
 
 /**
- * POST /api/groups/:id/decline  (auth) — decline a pending invite.
+ * POST /api/groups/:id/decline  (auth) - decline a pending invite.
  *
  * The counterpart to /accept: these two are the ONLY things that clear an
  * invitation. The pending member row is pulled, so the invitation stops
@@ -917,7 +917,7 @@ router.post(
       { $set: { read: true } }
     );
 
-    // Tell the chairperson — a declined invite shouldn't be silent, otherwise
+    // Tell the chairperson - a declined invite shouldn't be silent, otherwise
     // they sit waiting on someone who has already said no.
     const chairId = group.governance?.chairpersonUserId;
     if (chairId && String(chairId) !== String(req.userId)) {
@@ -936,7 +936,7 @@ router.post(
 );
 
 /**
- * GET /api/groups/:id/fee  (auth, member) — fee/lock status + amount owed.
+ * GET /api/groups/:id/fee  (auth, member) - fee/lock status + amount owed.
  */
 router.get(
   "/:id/fee",
@@ -957,7 +957,7 @@ router.get(
 );
 
 /**
- * POST /api/groups/:id/fee/pay  (auth, member) — pay outstanding monthly fee(s).
+ * POST /api/groups/:id/fee/pay  (auth, member) - pay outstanding monthly fee(s).
  * Charges via PawaPay deposit from the payer, advances feePaidThrough.
  * Body: { payerPhone? }
  */
@@ -971,7 +971,7 @@ router.post(
     const group = req.group;
     const g = group.toObject();
     // A group still waiting on its registration fee owes month 1 even though
-    // feePaidThrough was optimistically stamped at creation — this route is how
+    // feePaidThrough was optimistically stamped at creation - this route is how
     // the founder retries after cancelling or failing the mobile-money prompt.
     const awaitingFirst = isAwaitingFirstPayment(g);
     const months = awaitingFirst ? 1 : getMonthsOwed(g);
@@ -989,7 +989,7 @@ router.post(
     const payerPhone = req.body.payerPhone || req.user.phone;
 
     // Validate the full transaction against the model BEFORE initiating the
-    // deposit — PawaPay must never move money for a request we would reject.
+    // deposit - PawaPay must never move money for a request we would reject.
     const txn = new Transaction({
       groupId: group._id,
       groupName: group.name,
@@ -998,7 +998,7 @@ router.post(
       type: "fee",
       amount: -amount,
       status: "pending",
-      note: `Group fee — ${months} month(s)`,
+      note: `Group fee - ${months} month(s)`,
       receiptId: generateReceiptId("CHF"),
       meta: { months },
     });
@@ -1019,7 +1019,7 @@ router.post(
     }
 
     // feePaidThrough is only advanced by the settlement service once the
-    // payment reaches COMPLETED — inline below for simulated payments.
+    // payment reaches COMPLETED - inline below for simulated payments.
     txn.pawapay = { depositId: deposit.id, status: deposit.status };
     if (deposit.simulated) txn.status = "completed";
     await txn.save();
@@ -1056,7 +1056,7 @@ router.post(
  * refund + removal run from the approval executor once they carry it.
  *
  * Who votes: active Chairperson / Treasurer / Secretary, MINUS the person being
- * removed — an admin can never sit on the vote that removes them. Ordinary
+ * removed - an admin can never sit on the vote that removes them. Ordinary
  * members hold no vote here, the same as every other sensitive action.
  */
 router.post(
@@ -1090,7 +1090,7 @@ router.post(
       });
 
     // Money is leaving the pool, so the same lock that stops contributions and
-    // loans stops a removal — the group settles its fee first.
+    // loans stops a removal - the group settles its fee first.
     if (isGroupLocked(group.toObject()))
       return res.status(403).json({
         error: "Group is locked for unpaid fees. Settle the fee first.",
@@ -1208,7 +1208,7 @@ router.post(
 );
 
 /**
- * POST /api/groups/:id/delete-request  (auth, admin) — delete a group.
+ * POST /api/groups/:id/delete-request  (auth, admin) - delete a group.
  *
  * Nothing is erased. Deleting a group CLOSES it: the group document, every
  * transaction, receipt, penalty, loan and statement line stays exactly where it
@@ -1216,13 +1216,13 @@ router.post(
  * What changes is that the group leaves everyone's list of groups and nothing
  * new can be written into it.
  *
- * The money has to be out first — open loans or savings still in the pool block
+ * The money has to be out first - open loans or savings still in the pool block
  * it, because closing over either would strand real money.
  *
  * Who decides depends on who else is there. With other admins to vote, this
  * raises a group-deletion approval and the group sits at "deletion-pending"
- * until they answer. With nobody else to ask — the founder of a group nobody
- * else ever joined, which is the group most likely to need deleting — there is
+ * until they answer. With nobody else to ask - the founder of a group nobody
+ * else ever joined, which is the group most likely to need deleting - there is
  * no quorum to reach, so it closes on the spot.
  */
 router.post(
@@ -1238,7 +1238,7 @@ router.post(
       return res.status(400).json({ error: "This group is already closed" });
 
     // A church group is closing what the congregation gives toward, so only
-    // its Chairperson may start that — the app hides the control from the
+    // its Chairperson may start that - the app hides the control from the
     // other admins, and this refuses them if they ask anyway. Every other
     // group type keeps the any-admin-proposes-and-the-rest-vote rule.
     if (isProjectFundGroup(group) && req.member.role !== "Chairperson")
@@ -1288,7 +1288,7 @@ router.post(
 
     if (voters.length === 0) {
       await Group.updateOne({ _id: group._id }, { $set: { status: "closed" } });
-      // Ordinary members can still be here with no second admin — they are not
+      // Ordinary members can still be here with no second admin - they are not
       // asked, but they are told.
       if (others.length)
         await notifyAll(
@@ -1296,7 +1296,7 @@ router.post(
           {
             type: "governance",
             title: "Group closed",
-            body: `${req.user.name} closed ${group.name}. Your record of it — contributions, receipts and statements — stays in the app.`,
+            body: `${req.user.name} closed ${group.name}. Your record of it - contributions, receipts and statements - stays in the app.`,
             groupId: group._id,
             groupName: group.name,
             sms: true,

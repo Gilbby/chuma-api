@@ -55,7 +55,7 @@ router.post(
     // Project-fund groups (church) name the project a gift pays into. Naming
     // one is optional: a general offering is given to the church rather than
     // to any one thing, and lands on the statement as "General giving". What
-    // is refused is a project that was named and cannot take the money — a
+    // is refused is a project that was named and cannot take the money - a
     // gift meant for the building fund must not fall quietly into the pool.
     let projectId = null;
     if (isProjectFundGroup(group) && req.body.projectId) {
@@ -74,13 +74,13 @@ router.post(
     const phone = payerPhone || req.user.phone;
     const isCash = paymentMethod === "Cash";
 
-    // Mobile money is on hold for member money — savings come in as cash.
+    // Mobile money is on hold for member money - savings come in as cash.
     const held = rejectIfMobileMoneyHeld(paymentMethod);
     if (held) return res.status(held.status).json(held.body);
 
     // PRICE: split the base (what the member typed = what gets pooled) from the
     // grossed-up total we actually charge. `base` stays the pooled/credited
-    // figure; `depositAmount` is what PawaPay collects. Pure math — see
+    // figure; `depositAmount` is what PawaPay collects. Pure math - see
     // pricing.service.js; fee bands come from config so tuning is one file.
     const pricing = priceContribution({
       base: amount,
@@ -92,9 +92,9 @@ router.post(
     });
     // Breakdown surfaced to the frontend so it can show the real total charged.
     // networkFee = the member's OWN network charge to their wallet (display-only,
-    // not collected by us) — shown on the review tab / receipt.
+    // not collected by us) - shown on the review tab / receipt.
     // Cash is collected at face value: there is no deposit to gross up, and no
-    // platform fee we could take out of notes in a treasurer's hand — booking
+    // platform fee we could take out of notes in a treasurer's hand - booking
     // one would record revenue nobody ever received.
     const breakdown = isCash
       ? {
@@ -114,7 +114,7 @@ router.post(
 
     // Build the full transaction and run model validation BEFORE any money
     // moves. PawaPay must never be told to initiate a deposit for a request
-    // our own schema would reject (e.g. a bad paymentMethod) — that would
+    // our own schema would reject (e.g. a bad paymentMethod) - that would
     // leave an orphaned deposit on their side with no record on ours.
     const txn = new Transaction({
       groupId,
@@ -122,7 +122,7 @@ router.post(
       memberId: req.userId,
       memberName: req.user.name,
       type: "contribution",
-      amount: -amount, // BASE (pooled/credited) — money out of the member's wallet
+      amount: -amount, // BASE (pooled/credited) - money out of the member's wallet
       depositAmount: breakdown.depositAmount, // grossed-up total charged (face value for cash)
       platformFee: breakdown.platformFee, // platform revenue on this txn (never pooled)
       networkFee: breakdown.networkFee, // member's own MMO fee (display-only)
@@ -156,8 +156,8 @@ router.post(
 
     // Balances are NOT touched here. Savings/group rollups are applied by the
     // settlement service once the payment settles: PawaPay COMPLETED (webhook
-    // or reconciliation cron), inline below for simulated payments, or — for
-    // Cash — when the treasurer confirms receipt via POST /:id/confirm-cash.
+    // or reconciliation cron), inline below for simulated payments, or - for
+    // Cash - when the treasurer confirms receipt via POST /:id/confirm-cash.
     await txn.save();
 
     if (txn.status === "completed") await settleCompletedTransaction(txn);
@@ -187,11 +187,11 @@ router.post(
 /**
  * POST /api/contributions/:id/confirm-cash  (auth, group admin)
  * Acknowledge (or decline) physical receipt of a Cash payment.
- * Body: { received?: boolean }  — defaults to true.
+ * Body: { received?: boolean }  - defaults to true.
  * On confirm: settles the payment and stamps the confirmer's name on it.
  *
  * Handles both a plain Cash contribution and a Cash "combined" payment (the
- * unified checkout — savings + loan repayment(s) + penalties in one lump). Both
+ * unified checkout - savings + loan repayment(s) + penalties in one lump). Both
  * settle through settleCompletedTransaction, which applies the right effects by
  * transaction type, so this endpoint stays type-agnostic beyond the guard.
  */
@@ -212,7 +212,7 @@ router.post(
     const group = await Group.findById(txn.groupId).lean();
     if (!group) return res.status(404).json({ error: "Group not found" });
     // Any admin of the group, the same set that votes on the approval this
-    // receipt was raised as — the two surfaces must not disagree about who is
+    // receipt was raised as - the two surfaces must not disagree about who is
     // allowed to answer. The treasurer is who gets ASKED (see raiseCashReceipt);
     // a group whose treasurer is away still needs its members credited.
     if (!isGroupAdmin(group, req.userId))

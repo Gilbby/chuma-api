@@ -20,8 +20,8 @@ import {
 
 /**
  * Pays each active member their share of the group's pool and records a
- * share-out Transaction per member. Each member's stake is retired — savings,
- * contributions, totalSavings, wallet — only when THEIR transaction settles,
+ * share-out Transaction per member. Each member's stake is retired - savings,
+ * contributions, totalSavings, wallet - only when THEIR transaction settles,
  * and the cycle closes (cycleProgress = 0) when the last one does.
  *
  * How a payout settles depends on who can tell us it landed:
@@ -48,7 +48,7 @@ export async function getCycleStart(groupId) {
 }
 
 /**
- * Paid group-pool penalties banked in the CURRENT cycle — everything since the
+ * Paid group-pool penalties banked in the CURRENT cycle - everything since the
  * last distribution.
  *
  * Scoping matters because penalty income is profit, and a cycle's profit is
@@ -119,7 +119,7 @@ export async function distributeShareOut(group, { method } = {}) {
 
   // Payouts draw real money from the merchant float. Because netted loans no
   // longer need wallet cash, we only require the wallet to cover the NET cash
-  // going out — not the gross pot. Refuse BEFORE any payout goes out; status
+  // going out - not the gross pot. Refuse BEFORE any payout goes out; status
   // 409 lets callers keep the approval usable for later.
   const wallet = group.walletBalance || 0;
   if (totalNetCash > wallet) {
@@ -131,7 +131,7 @@ export async function distributeShareOut(group, { method } = {}) {
   }
 
   // Every transaction this run writes carries the same id, so the payouts
-  // screen shows ONE distribution — who has been paid and who is still owed —
+  // screen shows ONE distribution - who has been paid and who is still owed -
   // instead of every share-out the group has ever run.
   const shareOutId = new mongoose.Types.ObjectId();
 
@@ -139,10 +139,10 @@ export async function distributeShareOut(group, { method } = {}) {
   // wins: a run approved for mobile money while pawaPay disbursement is down
   // would strand every member behind a payout that cannot happen. An approval
   // with no method recorded (proposed before the choice existed) is paid
-  // manually — the option that cannot send real money to the wrong place.
+  // manually - the option that cannot send real money to the wrong place.
   const payManually = isMobileMoneyOnHold() || method !== "mobile-money";
 
-  // Leg A — repay each open loan out of the borrower's share, reusing the
+  // Leg A - repay each open loan out of the borrower's share, reusing the
   // tested repayment settlement (decrements loanCirculation, marks the loan
   // repaid). No real cash moves; the debt is offset against the payout below.
   const netted = [];
@@ -174,12 +174,12 @@ export async function distributeShareOut(group, { method } = {}) {
     }
   }
 
-  // Leg B — pay each member their share. The share-out transaction still books
+  // Leg B - pay each member their share. The share-out transaction still books
   // the FULL owed share (savings + profit) so savings reset correctly; Leg A
   // already returned the netted cash to the wallet, so the two net to the cash
   // we actually send (share − debt).
   const payouts = [];
-  // Members owed money the group has not paid out yet — the treasurer's list.
+  // Members owed money the group has not paid out yet - the treasurer's list.
   const awaitingPayment = [];
   for (const m of activeMembers) {
     const calc = result.members.find(
@@ -188,7 +188,7 @@ export async function distributeShareOut(group, { method } = {}) {
     if (!calc || calc.share <= 0) continue;
     const netCash = netCashById.get(calc.id) ?? calc.share;
 
-    // Whole share went to the member's loan — nothing to send. Still record the
+    // Whole share went to the member's loan - nothing to send. Still record the
     // share-out (completed) so their savings reset and the cycle can close.
     if (netCash <= 0) {
       const txn = await Transaction.create({
@@ -209,7 +209,7 @@ export async function distributeShareOut(group, { method } = {}) {
       continue;
     }
 
-    // A manual run: the group moves the money itself — notes across a table,
+    // A manual run: the group moves the money itself - notes across a table,
     // mobile money from the treasurer's own phone, a bank transfer. Nothing is
     // deducted, because there is no payout for us to charge for and no fee we
     // could take out of a payment we never touch, so the member receives their
@@ -230,7 +230,7 @@ export async function distributeShareOut(group, { method } = {}) {
         memberId: m.userId,
         memberName: m.name,
         type: "share-out",
-        amount: calc.share, // full owed — what settlement decrements from the pool
+        amount: calc.share, // full owed - what settlement decrements from the pool
         depositAmount: netCash, // what the member is handed
         platformFee: 0,
         status: "pending",
@@ -239,7 +239,7 @@ export async function distributeShareOut(group, { method } = {}) {
         meta: { memberSavings: m.savings, shareOutId },
       });
       // The vote passing is news, not money. It goes in their inbox and stops
-      // there — NO SMS. The one message that leaves the building about this
+      // there - NO SMS. The one message that leaves the building about this
       // payout is the completion receipt (confirmManualPayout), sent after the
       // money has actually reached them. Telling a member to expect money that
       // has not moved yet is how a group stops believing the app.
@@ -249,7 +249,7 @@ export async function distributeShareOut(group, { method } = {}) {
           userId: m.userId,
           type: "governance",
           title: "Share-out approved",
-          body: `The ${group.name} share-out was approved. Your K${netCash} is being paid out — you will get a receipt here the moment it is done.`,
+          body: `The ${group.name} share-out was approved. Your K${netCash} is being paid out - you will get a receipt here the moment it is done.`,
           groupId: group._id,
           groupName: group.name,
           transactionId: txn._id,
@@ -270,7 +270,7 @@ export async function distributeShareOut(group, { method } = {}) {
 
     // Deduct fees (PawaPay % + MNO + platform fee) from what the member NETS
     // after loan netting. pricePayout THROWS when the fees meet or exceed the
-    // amount (tiny stakes) — skip that member rather than crash the share-out.
+    // amount (tiny stakes) - skip that member rather than crash the share-out.
     let priced;
     try {
       priced = pricePayout({
@@ -302,7 +302,7 @@ export async function distributeShareOut(group, { method } = {}) {
     // retry, and the cycle fully resets when the last payout settles.
     //
     // A payout REJECTED at initiation never reaches PawaPay, so no callback
-    // or reconciliation will ever finalise it — record it failed immediately
+    // or reconciliation will ever finalise it - record it failed immediately
     // (making it retryable via retry-payout) and notify like any failure.
     const rejected = payout.status === "REJECTED";
     const txn = await Transaction.create({
@@ -311,7 +311,7 @@ export async function distributeShareOut(group, { method } = {}) {
       memberId: m.userId,
       memberName: m.name,
       type: "share-out",
-      amount: calc.share, // full owed — what settlement decrements from the pool
+      amount: calc.share, // full owed - what settlement decrements from the pool
       depositAmount: priced.netReceived, // what we actually sent to the member
       platformFee: priced.platformFee,
       status: rejected ? "failed" : payout.simulated ? "completed" : "pending",

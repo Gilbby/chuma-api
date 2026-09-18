@@ -72,7 +72,7 @@ function totalsFor(payouts) {
 
 /**
  * A run is over only when EVERY member's payout has settled. A failed payout
- * keeps the run open on purpose — somebody still has to deal with it, and a
+ * keeps the run open on purpose - somebody still has to deal with it, and a
  * distribution that quietly closed over a member who never got paid is the one
  * outcome this whole screen exists to prevent.
  */
@@ -91,7 +91,7 @@ const methodOf = (payouts) =>
  * Every share-out this group has ever run, as two numbers.
  *
  * The receipt line on the share-out screen is read by a group that may have
- * closed a dozen cycles, so naming only the most recent one buries the rest —
+ * closed a dozen cycles, so naming only the most recent one buries the rest -
  * and "we have done this three times and K132,000 has come back to us" is the
  * thing a member actually wants off that line. Runs are counted over distinct
  * distributions and money only where it actually moved, so the totals
@@ -190,7 +190,7 @@ router.get(
  * been paid, who is still owed, and who is waiting on a provider.
  *
  * Only a run still in flight is returned. The moment the last member is
- * settled the distribution is finished business — it stops being the thing the
+ * settled the distribution is finished business - it stops being the thing the
  * share-out screen is about and becomes a record, served by /history, so the
  * screen is clear for the next cycle instead of permanently showing a
  * "2 of 2 paid" the group has already been through. `lastCompleted` is the
@@ -199,7 +199,7 @@ router.get(
  *
  * Every member sees this, not just admins. A share-out where only the treasurer
  * can see who has been paid is the exact ledger a VSLA meets in person to
- * avoid — and a member who has NOT been handed their money needs a row to point
+ * avoid - and a member who has NOT been handed their money needs a row to point
  * at that says so.
  *
  * Also reports whether the mobile money hold is on, which is what decides
@@ -256,7 +256,7 @@ router.get(
           totalPaid: payouts.reduce((sum, p) => sum + p.amount, 0),
           method: methodOf(payouts),
         },
-        // Only costs a query on the screen that shows it — a group mid-run is
+        // Only costs a query on the screen that shows it - a group mid-run is
         // being told about this run, not about the ten before it.
         history: await historySummaryFor(req.group._id),
       });
@@ -286,7 +286,7 @@ function summariseRun(shareOutId, startedAt, payouts) {
   return {
     shareOutId: String(shareOutId),
     startedAt,
-    // Null while a run is still being paid — the one on the share-out
+    // Null while a run is still being paid - the one on the share-out
     // screen appears here too, marked open, rather than going missing.
     completedAt: closed ? settledAtOf(payouts) : null,
     closed,
@@ -307,7 +307,7 @@ function summariseRun(shareOutId, startedAt, payouts) {
  *
  * This is where a finished share-out goes to live. The share-out screen only
  * ever shows the run in progress, so without somewhere permanent to read it,
- * closing a cycle would erase the record of what it paid — and "what did we
+ * closing a cycle would erase the record of what it paid - and "what did we
  * each get last year" is a question a savings group asks constantly.
  *
  * Every member sees the whole thing, for the same reason they see a live run:
@@ -360,7 +360,7 @@ router.get(
  * One distribution in full: its headline figures and every member's payout.
  *
  * A run of forty members is a screen of its own, not something to unfold inside
- * a list — so the list asks for this the moment a member opens a row, and only
+ * a list - so the list asks for this the moment a member opens a row, and only
  * ever carries the rows they actually opened.
  */
 router.get(
@@ -408,7 +408,7 @@ router.get(
  * paying out immediately. Only one pending share-out per group at a time.
  *
  * The chairperson alone initiates. Ending a cycle is the single largest thing a
- * group does — it empties the pool and closes everyone's savings — so it starts
+ * group does - it empties the pool and closes everyone's savings - so it starts
  * with the person the group elected to hold that decision, not with whoever
  * happens to open the screen. The treasurer and secretary then approve it, and
  * approval must be UNANIMOUS across the group's active admins: there is no
@@ -416,13 +416,13 @@ router.get(
  *
  * The method is chosen here and fixed for the whole run, because it decides
  * what the admins are actually voting for: a MANUAL run commits the group to
- * paying every member themselves — notes, the treasurer's own mobile money, a
- * bank transfer — and confirming each one, while a mobile money run is one vote
+ * paying every member themselves - notes, the treasurer's own mobile money, a
+ * bank transfer - and confirming each one, while a mobile money run is one vote
  * and then pawaPay does the rest. It goes in the description so nobody approves
  * a fortnight of paying people by hand without meaning to.
  *
- * While the mobile money hold is on there is no choice to make — pawaPay
- * disbursement cannot pay anyone — so a request for it is corrected to manual
+ * While the mobile money hold is on there is no choice to make - pawaPay
+ * disbursement cannot pay anyone - so a request for it is corrected to manual
  * rather than refused. The group still gets its share-out.
  */
 router.post(
@@ -486,7 +486,7 @@ router.post(
     // Unanimous, and counted over ACTIVE admins only: an invited treasurer who
     // has not accepted yet cannot vote, so counting them would set a bar the
     // group can never reach. A group whose only admin is the chairperson needs
-    // one approval — their own — which their initiating vote supplies.
+    // one approval - their own - which their initiating vote supplies.
     const activeAdmins = group.members.filter(
       (m) => m.status === "active" && ADMIN_ROLES.includes(m.role)
     );
@@ -510,7 +510,7 @@ router.post(
       groupId: group._id,
       groupName: group.name,
       type: "share-out",
-      title: `Share-out distribution — ${group.name}`,
+      title: `Share-out distribution - ${group.name}`,
       description: `Approve end-of-cycle distribution of K${result.totalToDistribute} to members. ${methodLine}`,
       amount: result.totalToDistribute,
       requestedById: req.userId,
@@ -519,7 +519,7 @@ router.post(
       payoutMethod,
     });
 
-    // Everyone whose approval is still needed — not the chairperson, who is
+    // Everyone whose approval is still needed - not the chairperson, who is
     // the one asking and whose vote is cast by the same tap.
     const toAsk = activeAdmins.filter(
       (m) => String(m.userId) !== String(req.userId)

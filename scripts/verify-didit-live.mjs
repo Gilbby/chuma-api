@@ -4,7 +4,7 @@
  *   npm run verify:didit-live
  *
  * This proves the code will talk to the REAL Didit correctly once credentials
- * are in — WITHOUT a Didit account. It flips DIDIT_ENABLED=true and points
+ * are in - WITHOUT a Didit account. It flips DIDIT_ENABLED=true and points
  * DIDIT_BASE_URL at an ephemeral local server that impersonates Didit API v2,
  * then exercises the genuine axios path end-to-end:
  *   - createSession → POST /v2/session/ with the right headers + body, and
@@ -138,6 +138,6 @@ if (failures.length === 0) {
   console.log(`PASS (${passed}/${total})`);
   process.exit(0);
 } else {
-  console.log(`FAIL (${passed}/${total}) — ${failures.length} failed`);
+  console.log(`FAIL (${passed}/${total}) - ${failures.length} failed`);
   process.exit(1);
 }

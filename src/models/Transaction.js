@@ -20,14 +20,14 @@ const transactionSchema = new Schema(
         "fee",
         "withdrawal",
         // One deposit settling several obligations at once (savings + loan
-        // repayment(s) + penalties) — see the "combined" branch of
+        // repayment(s) + penalties) - see the "combined" branch of
         // settlement.service.js. meta carries the full breakdown.
         "combined",
       ],
       required: true,
     },
     // Signed amount: positive = money in to the member, negative = money out.
-    // amount = the BASE figure — what the member typed = what gets pooled/credited.
+    // amount = the BASE figure - what the member typed = what gets pooled/credited.
     amount: { type: Number, required: true },
 
     // depositAmount = grossed-up total actually charged to the member (requested
@@ -39,11 +39,11 @@ const transactionSchema = new Schema(
 
     // feesAbsorbed = provider fees Chuma paid so the member received the full
     // amount (loan disbursement). Booked as NEGATIVE platform revenue on
-    // settlement — a cash cost, the mirror of platformFee.
+    // settlement - a cash cost, the mirror of platformFee.
     feesAbsorbed: { type: Number, default: 0 },
 
     // networkFee = the member's OWN mobile network charge on a collection (money
-    // in), debited from their wallet by their MMO. Display-only — we never
+    // in), debited from their wallet by their MMO. Display-only - we never
     // collect it. Stored so the receipt can show it after payment.
     networkFee: { type: Number, default: 0 },
 
@@ -76,7 +76,7 @@ const transactionSchema = new Schema(
     note: { type: String },
     receiptId: { type: String, index: true },
 
-    // Settlement linkage — what the settlement service needs to apply this
+    // Settlement linkage - what the settlement service needs to apply this
     // transaction's effects once payment completes (see settlement.service.js):
     // penalty:{penaltyId} fee:{months} repayment/loan:{loanId}
     // share-out:{memberSavings}

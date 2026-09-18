@@ -3,7 +3,7 @@
 // This is an operator's tool, not a replacement for /invite: the real flow gives
 // the invitee an SMS, a notification and the choice to decline, and it is the
 // only path an admin has from inside the app. Use this when the invite loop is
-// in the way — a test account, a device you can't log into, an invite that was
+// in the way - a test account, a device you can't log into, an invite that was
 // cancelled by mistake.
 //
 // A "removed" row is left exactly as it stands. Someone rejoining gets a FRESH
@@ -21,7 +21,7 @@
 // unanswered invite instead of an active member. --activate answers an invite
 // they already have, which is the same end state as them tapping Accept: the
 // row goes active and picks up their account's name and userId. Without it, an
-// existing invite is left alone and the script refuses — answering for someone
+// existing invite is left alone and the script refuses - answering for someone
 // is not something to do by accident.
 import "dotenv/config";
 import mongoose from "mongoose";
@@ -138,7 +138,7 @@ async function main() {
     }
     await group.save();
     console.log(
-      `✔ ${existing.name} joined "${group.name}" as ${existing.role} — invite accepted` +
+      `✔ ${existing.name} joined "${group.name}" as ${existing.role} - invite accepted` +
         (roleArg && before !== existing.role ? ` (role ${before} → ${existing.role})` : "") +
         (user ? "" : "\n  No account for this number yet, so the row is still phone-only.")
     );
@@ -177,7 +177,7 @@ async function main() {
 
   console.log(
     `✔ ${user?.name || phone} added to "${group.name}" as ${role} (${pending ? "pending invite" : "active"})` +
-      (rejoining ? "  [rejoining — earlier stint kept as history]" : "") +
+      (rejoining ? "  [rejoining - earlier stint kept as history]" : "") +
       (user ? "" : "\n  No account for this number yet: they join it by signing up with this phone.")
   );
 }
