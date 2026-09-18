@@ -26,6 +26,16 @@ import config from "../config/index.js";
 
 const router = express.Router();
 
+// App-store reviewer demo login (see config.review). Precomputed once so the
+// hot OTP path stays a cheap string compare. The bypass is active only when
+// BOTH a review phone and code are configured; otherwise it is fully inert and
+// the number behaves like any other.
+const REVIEW_PHONE = config.review.phone ? normalizePhone(config.review.phone) : "";
+const REVIEW_CODE = config.review.code || "";
+const REVIEW_ENABLED = !!REVIEW_PHONE && !!REVIEW_CODE;
+const isReviewPhone = (normalizedPhone) =>
+  REVIEW_ENABLED && normalizedPhone === REVIEW_PHONE;
+
 const OTP_MODES = ["signup", "signin"];
 const MAX_OTP_ATTEMPTS = 5;
 const MAX_OTPS_PER_PHONE_PER_HOUR = 3;
@@ -78,6 +88,13 @@ router.post(
       return res.status(400).json({ error: "Invalid mode" });
 
     const normalized = normalizePhone(phone);
+
+    // Reviewer demo number: skip SMS, throttle and stored OTP entirely — the
+    // fixed code is accepted directly in verify-otp. Return success so the app
+    // advances to the code screen exactly as it would for a real number.
+    if (isReviewPhone(normalized)) {
+      return res.json({ message: "OTP sent", phone: normalized });
+    }
 
     // Signup is only for new numbers. If a fully set-up account (has a PIN)
     // already exists, don't start the create-account flow — send them to sign in.
@@ -142,6 +159,36 @@ router.post(
       return res.status(400).json({ error: "Invalid mode" });
 
     const normalized = normalizePhone(phone);
+
+    // Reviewer demo login: the fixed code signs in a persistent demo account
+    // without touching the OTP store. The account is created once (KYC marked
+    // verified so the reviewer can explore group creation without Didit) and
+    // reused thereafter, landing straight in the app.
+    if (isReviewPhone(normalized)) {
+      if (String(code) !== REVIEW_CODE) {
+        return res.status(400).json({ error: "Incorrect code" });
+      }
+      let reviewer = await User.findOne({ phone: normalized });
+      if (!reviewer) {
+        reviewer = await User.create({
+          name: "App Reviewer",
+          phone: normalized,
+          kyc: {
+            provider: "review",
+            status: "verified",
+            firstName: "App",
+            fullName: "App Reviewer",
+            decisionAt: new Date(),
+          },
+        });
+      }
+      return res.json({
+        token: signToken(reviewer._id),
+        user: sanitizeUser(reviewer),
+        next: hasRealName(reviewer.name) ? "tabs" : "name",
+      });
+    }
+
     const otp = await Otp.findOne({
       phone: normalized,
       purpose: mode,

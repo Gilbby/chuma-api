@@ -193,6 +193,17 @@ export const config = {
     expiryMinutes: num(process.env.OTP_EXPIRY_MINUTES, 5),
   },
 
+  // App-store reviewer demo login. Google Play and Apple reviewers cannot
+  // receive a Zambian SMS OTP, so when BOTH of these are set, this exact phone
+  // number accepts this exact code in the normal OTP flow — no SMS is sent and
+  // no code is stored — and signs in a persistent demo account. It is inert
+  // unless both are provided, so environments that omit them have no bypass.
+  // Document the pair in Play "App access" and Apple "App Review Information".
+  review: {
+    phone: process.env.REVIEW_PHONE || "",
+    code: process.env.REVIEW_OTP || "",
+  },
+
   africasTalking: {
     username: process.env.AT_USERNAME || "sandbox",
     apiKey: process.env.AT_API_KEY || "",
