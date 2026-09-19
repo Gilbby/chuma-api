@@ -111,6 +111,19 @@ router.post(
         });
     }
 
+    // Sign-in is only for existing accounts. If there is no set-up account for
+    // this number - never registered, or the account was deleted - don't send a
+    // code (which would be a wasted SMS and a confusing dead end). Point them to
+    // sign up instead. An invited stub with no PIN is not a signed-up account.
+    if (mode === "signin") {
+      const existing = await User.findOne({ phone: normalized });
+      if (!existing?.pinHash)
+        return res.status(404).json({
+          error: "No account found for this number. Please sign up instead.",
+          code: "no_account",
+        });
+    }
+
     // Per-phone throttle: SMS costs money and codes shouldn't be farmable
     const recent = await Otp.countDocuments({
       phone: normalized,
