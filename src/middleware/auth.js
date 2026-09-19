@@ -40,6 +40,8 @@ export async function requireAuth(req, res, next) {
  * verification screen instead of showing a raw error.
  */
 export function requireKyc(req, res, next) {
+  // KYC disabled (tracker build): no identity gate at all.
+  if (!config.rules.kycEnabled) return next();
   if (req.user?.kyc?.status === "verified") return next();
   return res.status(403).json({
     error: "Identity verification required",

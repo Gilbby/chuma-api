@@ -283,6 +283,15 @@ export const config = {
 
   rules: {
     groupMonthlyFee: num(process.env.GROUP_MONTHLY_FEE, 100),
+    // Master switch for the group fee. OFF for the non-financial tracker build
+    // (personal Play account): group creation is free and instant, no PawaPay
+    // charge, no fee-based locking. Set GROUP_FEES_ENABLED=true for the
+    // organization-account build to restore monthly fees end to end.
+    groupFeesEnabled: bool(process.env.GROUP_FEES_ENABLED, false),
+    // KYC (Didit identity verification) master switch. OFF for the
+    // non-financial tracker build: the app verifies no identity and requireKyc
+    // passes through. Set KYC_ENABLED=true for the org-account build to restore.
+    kycEnabled: bool(process.env.KYC_ENABLED, false),
     graceDays: num(process.env.GROUP_FEE_GRACE_DAYS, 5),
     // A founder pays a monthly fee per group, so the cap is anti-abuse, not
     // a product limit - it stops one account spinning up endless groups.

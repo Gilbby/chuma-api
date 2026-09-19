@@ -124,9 +124,12 @@ async function start() {
   await connectDB();
 
   // Daily at 08:00 server time: remind chairperson/treasurer of groups in the
-  // fee grace period, counting down days left before lock.
-  cron.schedule("0 8 * * *", runFeeLockReminders);
-  console.log("   Cron: fee-lock reminders scheduled (daily 08:00)");
+  // fee grace period, counting down days left before lock. Only runs when the
+  // group fee is enabled (org-account build) - the tracker build has no fee.
+  if (config.rules.groupFeesEnabled) {
+    cron.schedule("0 8 * * *", runFeeLockReminders);
+    console.log("   Cron: fee-lock reminders scheduled (daily 08:00)");
+  }
 
   // Daily at 08:15 server time (staggered after the fee-lock job): auto-detect
   // late contributions and late loan repayments, issuing penalties idempotently.

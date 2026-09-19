@@ -232,6 +232,12 @@ export function isAwaitingFirstPayment(group) {
 }
 
 export function getGraceInfo(group) {
+  // Fees disabled (tracker build): every group reads as fully paid, so nothing
+  // is ever locked or awaiting payment - this also unlocks any legacy group
+  // still stored as "pending-payment" from before the fee was removed.
+  if (!config.rules.groupFeesEnabled) {
+    return { status: "paid", daysIntoGrace: 0, daysLeft: GRACE_PERIOD_DAYS };
+  }
   // Nothing has ever been paid, so this is not a grace window - it is a group
   // that has not started yet. Reported separately so the client can say
   // "waiting for payment" instead of "your fee is overdue".

@@ -191,7 +191,7 @@ async function applyLoanRepayment({ loanId, amount }) {
  * In-app notification only for invitees who already have an account; SMS to
  * everyone, so an unregistered invitee knows to sign up.
  */
-async function announceGroupActivated(groupId) {
+export async function announceGroupActivated(groupId, { feeMessage = true } = {}) {
   const group = await Group.findById(groupId).lean();
   if (!group) return;
 
@@ -225,11 +225,15 @@ async function announceGroupActivated(groupId) {
       userId: chair.userId,
       type: "governance",
       title: "Group is now active",
-      body: `${group.name} is live - the registration fee was received.`,
+      body: feeMessage
+        ? `${group.name} is live - the registration fee was received.`
+        : `${group.name} is live. Invite members and start tracking together.`,
       groupId: group._id,
       groupName: group.name,
       sms: true,
-      smsText: `Chuma: ${group.name} is now active. Your registration fee was received.`,
+      smsText: feeMessage
+        ? `Chuma: ${group.name} is now active. Your registration fee was received.`
+        : `Chuma: ${group.name} is now active.`,
     });
   }
 }

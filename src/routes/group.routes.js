@@ -37,7 +37,10 @@ import {
 } from "../services/pawapay.service.js";
 import { sendSms } from "../services/sms.service.js";
 import { notify, notifyAll } from "../services/notify.service.js";
-import { settleCompletedTransaction } from "../services/settlement.service.js";
+import {
+  settleCompletedTransaction,
+  announceGroupActivated,
+} from "../services/settlement.service.js";
 import config from "../config/index.js";
 
 const router = express.Router();
@@ -475,16 +478,23 @@ router.post(
         treasurerPhone: body.treasurerPhone,
         secretaryPhone: body.secretaryPhone,
       },
-      monthlyFee: fee,
-      feeDueDay,
-      // Month 1 is only marked paid when the fee payment settles; until then
-      // the group sits at the start of its grace window (5 days - far longer
-      // than a callback takes).
-      feePaidThrough: now,
-      // Nobody can open or use the group until the fee deposit COMPLETES -
-      // settlement.service.js flips this to "active". Until then the founder
-      // can only view it and retry the payment.
-      status: "pending-payment",
+      // Fee fields only when the group fee is enabled. When it's off (tracker
+      // build) the group is created live with no fee, so none of these are set
+      // and getGraceInfo()/isGroupLocked() treat it as "paid" (never locked).
+      ...(config.rules.groupFeesEnabled
+        ? {
+            monthlyFee: fee,
+            feeDueDay,
+            // Month 1 is only marked paid when the fee payment settles; until
+            // then the group sits at the start of its grace window (5 days -
+            // far longer than a callback takes).
+            feePaidThrough: now,
+            // Nobody can open or use the group until the fee deposit COMPLETES
+            // - settlement.service.js flips this to "active". Until then the
+            // founder can only view it and retry the payment.
+            status: "pending-payment",
+          }
+        : { status: "active" }),
       members: [
         {
           userId: req.userId,
@@ -506,6 +516,15 @@ router.post(
       ],
     });
     await group.validate(); // ValidationError → 400 via the error middleware
+
+    // Fees disabled (tracker build): no PawaPay charge. The group is already
+    // "active", so save it and send the co-admin invites the fee flow would
+    // otherwise hold back until settlement, then return the live group.
+    if (!config.rules.groupFeesEnabled) {
+      await group.save();
+      await announceGroupActivated(group._id, { feeMessage: false });
+      return res.status(201).json({ group: withFeeStatus(group) });
+    }
 
     const feeTxn = new Transaction({
       groupId: group._id,
