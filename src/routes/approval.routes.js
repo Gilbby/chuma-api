@@ -602,13 +602,17 @@ async function executeApproval(approval, req) {
           userId: chairId,
           type: "governance",
           title: "Member removal approved",
-          body: `${member.name} was removed from ${group.name}. K${result.refunded} refunded${result.appliedToLoan > 0 ? ` after K${result.appliedToLoan} cleared their loan` : ""}${result.pending ? ". The payout is on its way." : "."}`,
+          body: result.contributionKept
+            ? `${member.name} was removed from ${group.name}. Their contribution stays in the group fund - nothing is refunded.`
+            : `${member.name} was removed from ${group.name}. K${result.refunded} refunded${result.appliedToLoan > 0 ? ` after K${result.appliedToLoan} cleared their loan` : ""}${result.pending ? ". The payout is on its way." : "."}`,
           groupId: group._id,
           groupName: group.name,
           // A member left and group money went with them. The chair answers
           // for both at the next meeting.
           sms: true,
-          smsText: `Chuma: ${member.name} was removed from ${group.name}. K${result.refunded} was refunded to them.`,
+          smsText: result.contributionKept
+            ? `Chuma: ${member.name} was removed from ${group.name}. Their contribution stays in the group fund.`
+            : `Chuma: ${member.name} was removed from ${group.name}. K${result.refunded} was refunded to them.`,
         });
       }
       return { type: "member-removed", groupId: group._id, ...result };

@@ -987,6 +987,11 @@ router.post(
   paymentLimiter,
   requireGroupMember("id", { allowPendingPayment: true }),
   asyncHandler(async (req, res) => {
+    // Fees disabled (tracker build): this endpoint never charges. The client no
+    // longer reaches it, but guard it so nothing can initiate a fee deposit.
+    if (!config.rules.groupFeesEnabled)
+      return res.status(410).json({ error: "Group fees are disabled" });
+
     const group = req.group;
     const g = group.toObject();
     // A group still waiting on its registration fee owes month 1 even though

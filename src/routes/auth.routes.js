@@ -14,7 +14,11 @@ import {
   normalizePhone,
 } from "../utils/helpers.js";
 import { sendOtpSms } from "../services/sms.service.js";
-import { getTrustScore, getTrustBand } from "../services/logic.service.js";
+import {
+  getTrustScore,
+  getTrustBand,
+  isProjectFundGroup,
+} from "../services/logic.service.js";
 import {
   createSession as createDiditSession,
   retrieveDecision,
@@ -570,7 +574,10 @@ router.delete(
       );
       if (!me) continue;
 
-      if ((me.savings || 0) > 0) {
+      // In a project-fund group (e.g. a church), what a member puts in is a
+      // contribution to the shared fund, not personal savings they get back -
+      // there is nothing to refund, so it must not block account deletion.
+      if (!isProjectFundGroup(g.groupType) && (me.savings || 0) > 0) {
         blockers.push({
           type: "savings",
           groupName: g.name,

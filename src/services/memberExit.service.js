@@ -1,9 +1,12 @@
 import { Transaction } from "../models/Transaction.js";
 import { Loan } from "../models/Loan.js";
+import { Group } from "../models/Group.js";
 import { generateReceiptId } from "../utils/helpers.js";
 import { initiatePayout, providerFromPhone } from "./pawapay.service.js";
 import { pricePayout } from "./pricing.service.js";
 import { isMobileMoneyOnHold } from "../utils/paymentHold.js";
+import { isProjectFundGroup } from "./logic.service.js";
+import { notify } from "./notify.service.js";
 import { config } from "../config/index.js";
 import {
   settleCompletedTransaction,
@@ -31,6 +34,51 @@ import {
  */
 export async function refundAndRemoveMember(group, member, { approvalId } = {}) {
   const savings = Math.max(0, member.savings || 0);
+
+  // Project-fund (church) groups: what a member put in is a CONTRIBUTION to the
+  // shared fund, not personal savings, so leaving or being removed refunds
+  // nothing - it stays in the fund and still counts toward what the group has
+  // raised. Retire the member row with no payout and WITHOUT drawing down the
+  // fund totals (unlike a savings-group refund, which pays out and reduces
+  // totalSavings). Lending is off in these groups, so there is no loan to net.
+  if (isProjectFundGroup(group.groupType)) {
+    await Group.updateOne(
+      { _id: group._id, "members._id": member._id },
+      {
+        $set: {
+          "members.$.status": "removed",
+          "members.$.savings": 0,
+          "members.$.exitedAt": new Date(),
+          "members.$.exitSavings": savings,
+          "members.$.exitRefund": 0,
+          "members.$.exitLoanCleared": 0,
+          ...(approvalId ? { "members.$.exitApprovalId": approvalId } : {}),
+        },
+      }
+    );
+    // Tell the removed member plainly - nothing about money, since a church
+    // contribution is never refunded on exit.
+    if (member.userId) {
+      await notify({
+        userId: member.userId,
+        type: "governance",
+        title: "Removed from group",
+        body: `You were removed from ${group.name}.`,
+        groupId: group._id,
+        groupName: group.name,
+        sms: true,
+        smsText: `Chuma: You were removed from ${group.name}.`,
+      });
+    }
+    return {
+      refunded: 0,
+      appliedToLoan: 0,
+      savings,
+      netted: [],
+      removed: true,
+      contributionKept: true,
+    };
+  }
 
   const openLoans = await Loan.find({
     groupId: group._id,
