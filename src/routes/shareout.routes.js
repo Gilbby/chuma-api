@@ -16,6 +16,7 @@ import {
   computeLoanNetting,
   getRequiredApprovals,
   isProjectFundGroup,
+  isChilimbaGroup,
 } from "../services/logic.service.js";
 import { Loan } from "../models/Loan.js";
 import { Transaction } from "../models/Transaction.js";
@@ -441,6 +442,13 @@ router.post(
       return res
         .status(400)
         .json({ error: "This group gives toward projects and does not share out" });
+    // A chilimba hands its whole pool to one member each round (see
+    // /api/chilimba/:groupId/propose-payout), so there is no end-of-cycle pool
+    // to split proportionally.
+    if (isChilimbaGroup(group))
+      return res.status(400).json({
+        error: "This group rotates its pool and does not share out",
+      });
 
     const existing = await Approval.exists({
       groupId: group._id,

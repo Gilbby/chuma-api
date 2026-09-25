@@ -16,6 +16,10 @@ const transactionSchema = new Schema(
         "loan",
         "repayment",
         "share-out",
+        // A chilimba round payout: the whole pool handed to the one member
+        // whose turn it is this round. Unlike share-out (everyone at once,
+        // proportional) this pays a single recipient the entire pot.
+        "chilimba-payout",
         "penalty",
         "fee",
         "withdrawal",

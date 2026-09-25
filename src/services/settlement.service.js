@@ -489,6 +489,44 @@ export async function settleCompletedTransaction(txn) {
       return;
     }
 
+    case "chilimba-payout": {
+      // A chilimba round payout landed: the whole pool was handed to the one
+      // member whose turn it was this round. Retire the round in a single
+      // atomic write, guarded on the group still sitting on THIS round so a
+      // replayed settlement (cash txns settle inline, but be safe) can never
+      // advance the rotation twice or pay a round out over again:
+      //   - every active member's per-round savings reset to 0 and the pool
+      //     (walletBalance/totalSavings) empties - a chilimba does not
+      //     accumulate savings, the money passes straight through. The lifetime
+      //     `contributions` count is left alone so it still records how many
+      //     times each member has paid in;
+      //   - the recipient is stamped as having received, with the round;
+      //   - currentRound advances (past totalRounds = rotation complete).
+      const round = Number(txn.meta?.chilimbaRound);
+      if (!round || !txn.memberId) return;
+      await Group.updateOne(
+        { _id: txn.groupId, "chilimba.currentRound": round },
+        {
+          $set: {
+            totalSavings: 0,
+            walletBalance: 0,
+            "members.$[a].savings": 0,
+            "members.$[r].payoutReceived": true,
+            "members.$[r].payoutRound": round,
+            "members.$[r].payoutReceivedAt": new Date(),
+            "chilimba.currentRound": round + 1,
+          },
+        },
+        {
+          arrayFilters: [
+            { "a.status": "active" },
+            { "r.userId": txn.memberId },
+          ],
+        }
+      );
+      return;
+    }
+
     case "withdrawal": {
       // A removed member's refund landed. Only an exit withdrawal has effects;
       // any other withdrawal shape stays inert (as before).
@@ -592,6 +630,7 @@ const FAIL_LABELS = {
   repayment: "loan repayment",
   loan: "loan disbursement",
   "share-out": "share-out payout",
+  "chilimba-payout": "chilimba payout",
   withdrawal: "removal refund",
   combined: "payment",
 };
@@ -604,6 +643,7 @@ const FAIL_NOTIF_TYPE = {
   repayment: "repayment",
   loan: "loan",
   "share-out": "governance",
+  "chilimba-payout": "governance",
   withdrawal: "governance",
   combined: "contribution",
 };
@@ -617,7 +657,10 @@ export async function handleFailedTransaction(txn) {
   const notifType = FAIL_NOTIF_TYPE[txn.type] || "governance";
   const amount = Math.abs(txn.amount);
   const isPayout =
-    txn.type === "loan" || txn.type === "share-out" || txn.type === "withdrawal";
+    txn.type === "loan" ||
+    txn.type === "share-out" ||
+    txn.type === "chilimba-payout" ||
+    txn.type === "withdrawal";
 
   if (txn.memberId) {
     await notify({

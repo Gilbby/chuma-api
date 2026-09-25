@@ -17,6 +17,7 @@ import { pricePayout } from "../services/pricing.service.js";
 import { notify, notifyAll } from "../services/notify.service.js";
 import { config } from "../config/index.js";
 import { distributeShareOut } from "../services/shareout.service.js";
+import { currentRecipient } from "../services/chilimba.service.js";
 import { resolveCashReceipt } from "../services/cashReceipt.service.js";
 import { refundAndRemoveMember } from "../services/memberExit.service.js";
 import {
@@ -653,6 +654,84 @@ async function executeApproval(approval, req) {
       }
       throw err;
     }
+  }
+
+  if (approval.type === "chilimba-payout" && approval.groupId) {
+    const group = await Group.findById(approval.groupId);
+    if (!group) return null;
+
+    const round = group.chilimba?.currentRound;
+    // Rotation already finished, or the round moved on - nothing to pay. Not a
+    // block (re-running won't change it), so it stamps executed like a no-op.
+    if (!round || round > (group.chilimba?.totalRounds || 0)) {
+      await Approval.updateOne({ _id: approval._id }, { status: "executed" });
+      approval.status = "executed";
+      return { type: "chilimba-payout-noop", reason: "rotation already complete" };
+    }
+
+    const recipient = currentRecipient(group);
+    if (!recipient || !recipient.userId) {
+      await Approval.updateOne({ _id: approval._id }, { status: "executed" });
+      approval.status = "executed";
+      return { type: "chilimba-payout-noop", reason: "no recipient this round" };
+    }
+
+    // Pay out whatever has actually been collected this round. An empty pot is
+    // a BLOCK, not a failure: the approval stays runnable so an admin can run it
+    // again once members have contributed, exactly like a share-out the wallet
+    // cannot yet cover.
+    const pool = group.walletBalance || 0;
+    if (pool <= 0)
+      return {
+        type: "chilimba-payout-blocked",
+        reason:
+          "Nothing has been collected for this round yet. Members need to contribute first.",
+      };
+
+    // Cash payout, recorded and completed inline - the settlement service's
+    // "chilimba-payout" case empties the pool, stamps the recipient as received
+    // and advances the rotation, all guarded on this round so it is exactly-once.
+    const txn = await Transaction.create({
+      groupId: group._id,
+      groupName: group.name,
+      memberId: recipient.userId,
+      memberName: recipient.name,
+      type: "chilimba-payout",
+      amount: pool,
+      depositAmount: pool,
+      platformFee: 0,
+      paymentMethod: "Cash",
+      status: "completed",
+      note: `Chilimba payout - round ${round}`,
+      receiptId: generateReceiptId("CHP"),
+      meta: { chilimbaRound: round },
+    });
+    await settleCompletedTransaction(txn);
+
+    // One-shot: mark executed so a later /execute can never pay the NEXT round
+    // out early (settlement guards the same round, but the round has advanced).
+    await Approval.updateOne({ _id: approval._id }, { status: "executed" });
+    approval.status = "executed";
+
+    await notify({
+      userId: recipient.userId,
+      type: "governance",
+      title: "Chilimba payout received",
+      body: `It is your turn: the ${group.name} pool of K${pool} is yours this round.`,
+      groupId: group._id,
+      groupName: group.name,
+      sms: true,
+      smsText: `Chuma: It is your turn - the ${group.name} chilimba pool of K${pool} is yours this round.`,
+    });
+
+    return {
+      type: "chilimba-payout-distributed",
+      groupId: approval.groupId,
+      round,
+      recipientId: String(recipient.userId),
+      amount: pool,
+      transactionId: txn._id,
+    };
   }
 
   return { type: approval.type, note: "Approved (no automated action)" };

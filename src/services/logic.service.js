@@ -24,6 +24,22 @@ export function isProjectFundGroup(group) {
   return PROJECT_FUND_TYPES.includes(type);
 }
 
+/**
+ * Rotating-savings types (chilimba / ROSCA). Everyone contributes a fixed
+ * amount each round on a schedule, and the whole pool goes to ONE member that
+ * round, rotating in a random order drawn at the start until all have received
+ * once. So a chilimba keeps a contribution cycle and its late-contribution
+ * penalties, but has NO internal lending and NO end-of-cycle share-out - the
+ * pool is emptied every round instead of split at the end. The rotation state
+ * lives in `group.chilimba` and per-member `payoutPosition`/`payoutReceived`.
+ */
+export const CHILIMBA_TYPES = ["chilimba"];
+
+export function isChilimbaGroup(group) {
+  const type = typeof group === "string" ? group : group?.groupType;
+  return CHILIMBA_TYPES.includes(type);
+}
+
 // ─── SHARE-OUT (shareOut.ts) ────────────────────────────────────────────────
 
 export function computeShareOut(members, totalProfit) {
@@ -498,6 +514,8 @@ export function countAdmins(members) {
 export default {
   PROJECT_FUND_TYPES,
   isProjectFundGroup,
+  CHILIMBA_TYPES,
+  isChilimbaGroup,
   computeShareOut,
   estimateGroupProfit,
   getMaxLoan,

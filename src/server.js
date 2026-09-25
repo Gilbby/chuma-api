@@ -29,6 +29,7 @@ import paymentRoutes from "./routes/payment.routes.js";
 import loanRoutes from "./routes/loan.routes.js";
 import approvalRoutes from "./routes/approval.routes.js";
 import shareoutRoutes from "./routes/shareout.routes.js";
+import chilimbaRoutes from "./routes/chilimba.routes.js";
 import miscRoutes from "./routes/misc.routes.js";
 import webhookRoutes from "./routes/webhook.routes.js";
 
@@ -106,6 +107,7 @@ app.use("/api/payments", paymentRoutes); // unified "pay everything at once" che
 app.use("/api/loans", loanRoutes);
 app.use("/api/approvals", approvalRoutes);
 app.use("/api/shareout", shareoutRoutes);
+app.use("/api/chilimba", chilimbaRoutes); // rotating-savings draw + round payouts
 app.use("/api", miscRoutes); // penalties, notifications, transactions, reports
 app.use("/api/webhooks", webhookRoutes);
 

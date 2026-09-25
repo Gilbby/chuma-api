@@ -30,6 +30,7 @@ import {
   getSavingsGrowth,
   getRequiredApprovals,
   isProjectFundGroup,
+  isChilimbaGroup,
 } from "../services/logic.service.js";
 import {
   initiateDeposit,
@@ -401,6 +402,11 @@ router.post(
     // a church group that quietly behaves like a savings group.
     const groupType = body.groupType || "savings-group";
     const projectFund = isProjectFundGroup(groupType);
+    // A chilimba (rotating savings) keeps a contribution cycle and its
+    // late-contribution penalties, but never lends and never shares out - the
+    // pool is handed to one member each round instead. Loan settings sent by a
+    // hand-rolled request are discarded here, the same way project-fund's are.
+    const chilimba = isChilimbaGroup(groupType);
 
     let projects = [];
     if (projectFund) {
@@ -432,7 +438,15 @@ router.post(
           approvalThreshold:
             body.constitution?.approvalThreshold || "majority",
         }
-      : body.constitution || {};
+      : chilimba
+        ? {
+            // Keep whatever the group set for late-contribution penalties, but
+            // force lending OFF - a chilimba never lends (the schema default is
+            // ON, so this must be explicit).
+            ...(body.constitution || {}),
+            internalLendingEnabled: false,
+          }
+        : body.constitution || {};
 
     // Optional co-admins named at creation - treasurer & secretary. Each becomes
     // a PENDING member with their role and gets an invite notification + SMS,
@@ -467,12 +481,20 @@ router.post(
       nextContributionDate: projectFund
         ? undefined
         : advanceContributionDate(now, body.contributionFrequency || "Monthly"),
+      // A chilimba empties its pool every round to one member and never runs an
+      // end-of-cycle share-out, so it has no share-out date.
       shareOutDate:
-        !projectFund && body.shareOutDate ? new Date(body.shareOutDate) : undefined,
-      loanInterestRate: projectFund ? 0 : body.loanInterestRate ?? 5,
-      loanMaxMultiplier: projectFund ? 0 : body.loanMaxMultiplier ?? 3,
+        !projectFund && !chilimba && body.shareOutDate
+          ? new Date(body.shareOutDate)
+          : undefined,
+      // No lending in project-fund or chilimba groups.
+      loanInterestRate: projectFund || chilimba ? 0 : body.loanInterestRate ?? 5,
+      loanMaxMultiplier: projectFund || chilimba ? 0 : body.loanMaxMultiplier ?? 3,
       constitution,
       projects,
+      // Rotation starts undrawn: the chairperson draws the random order once the
+      // members are in (POST /api/chilimba/:id/draw), which opens round 1.
+      chilimba: chilimba ? { orderDrawn: false, currentRound: 0 } : undefined,
       governance: {
         chairpersonUserId: req.userId,
         treasurerPhone: body.treasurerPhone,
@@ -600,6 +622,16 @@ router.post(
     if (!phone || typeof phone !== "string")
       return res.status(400).json({ error: "Phone required" });
     const group = req.group;
+
+    // Once a chilimba's payout order is drawn its membership is frozen: the
+    // round count and everyone's turn were fixed against exactly the members who
+    // were in at the draw, so a new member joining midway would break the
+    // rotation. They can start a fresh chilimba together next round.
+    if (isChilimbaGroup(group) && group.chilimba?.orderDrawn)
+      return res.status(400).json({
+        error:
+          "The payout order has been drawn, so this chilimba is closed to new members.",
+      });
 
     // The member subdoc is added with updateOne + $push, which does NOT run
     // schema validators, so an unchecked role would be written verbatim.

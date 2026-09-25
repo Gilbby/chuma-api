@@ -27,6 +27,10 @@ const approvalSchema = new Schema(
         "member-removal",
         "group-deletion",
         "share-out",
+        // A chilimba round payout: the admins approve handing the whole pool to
+        // the member whose turn it is this round, then it is recorded and the
+        // rotation advances. Gated like share-out because real money moves.
+        "chilimba-payout",
         // An admin acknowledging that cash physically reached them. Unlike the
         // rest of this list it is a receipt, not a group decision, so it needs
         // ONE admin rather than a quorum - but it moves real money into a

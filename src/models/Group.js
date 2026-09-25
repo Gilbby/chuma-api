@@ -26,6 +26,16 @@ const memberSchema = new Schema(
       default: "active",
     },
 
+    // Chilimba (rotating savings) only. The rotation is a random draw locked at
+    // draw time: payoutPosition is this member's 1-based slot in it (null until
+    // the order is drawn), and payoutReceived records that they have taken the
+    // pool once - the round they took it and when. Everyone receives exactly
+    // once, so a member with payoutReceived true is done for the whole rotation.
+    payoutPosition: { type: Number, default: null },
+    payoutReceived: { type: Boolean, default: false },
+    payoutRound: { type: Number },
+    payoutReceivedAt: { type: Date },
+
     // A removed member's row is KEPT, never deleted: what they saved and
     // contributed is part of the group's history and has to outlive them
     // leaving. Their live savings go to 0 when the refund lands (the money is
@@ -70,6 +80,23 @@ const projectSchema = new Schema(
   { _id: true }
 );
 
+// Chilimba rotation state. A chilimba (rotating savings / ROSCA) pays the whole
+// pool to one member each round in a fixed order, until everyone has received
+// once. Only chilimba groups have this - see CHILIMBA_TYPES in logic.service.js.
+// The order is a random draw locked when `orderDrawn` flips true; `totalRounds`
+// is the active-member headcount captured at that moment (membership is frozen
+// once drawn), and `currentRound` is the 1-based round awaiting payout (0 before
+// the draw; > totalRounds once the whole rotation is complete).
+const chilimbaSchema = new Schema(
+  {
+    orderDrawn: { type: Boolean, default: false },
+    orderDrawnAt: { type: Date },
+    currentRound: { type: Number, default: 0 },
+    totalRounds: { type: Number },
+  },
+  { _id: false }
+);
+
 const groupSchema = new Schema(
   {
     name: { type: String, required: true },
@@ -82,6 +109,9 @@ const groupSchema = new Schema(
         "womens-group",
         "church-group",
         "investment-group",
+        // Rotating savings (ROSCA): everyone contributes a fixed amount each
+        // round and one member takes the whole pool, rotating until all have.
+        "chilimba",
       ],
       default: "savings-group",
     },
@@ -167,6 +197,10 @@ const groupSchema = new Schema(
     // PROJECT_FUND_TYPES in logic.service.js) must have at least one from
     // creation; every other type leaves this empty.
     projects: [projectSchema],
+
+    // Rotation state for chilimba groups only (see CHILIMBA_TYPES in
+    // logic.service.js). Left undefined for every other type.
+    chilimba: { type: chilimbaSchema, default: undefined },
 
     // Monthly fee / lock state
     monthlyFee: { type: Number, default: 100 },

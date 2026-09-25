@@ -61,6 +61,7 @@ const GROUP_DIRECTION = {
   penalty: "in",
   loan: "out",
   "share-out": "out",
+  "chilimba-payout": "out",
   withdrawal: "out",
   fee: "out",
 };
@@ -75,6 +76,7 @@ const PURPOSE_LABELS = {
   loan: "Loan disbursed to you",
   "savings-returned": "Your savings returned",
   "profit-share": "Profit share",
+  "chilimba-payout": "Chilimba payout received",
   withdrawal: "Withdrawal",
   other: "Other",
 };
@@ -89,6 +91,7 @@ const PURPOSE_ORDER = [
   "loan",
   "savings-returned",
   "profit-share",
+  "chilimba-payout",
   "withdrawal",
   "other",
 ];
@@ -178,6 +181,8 @@ export function describe(txn, { forGroup = false } = {}) {
       return "Contribution (part of combined payment)";
     case "share-out":
       return "Cycle share-out - savings paid out";
+    case "chilimba-payout":
+      return forGroup ? "Chilimba round payout" : "Chilimba payout - the pool this round";
     case "loan":
       return forGroup ? "Loan disbursed" : "Loan disbursed to you";
     case "repayment":
