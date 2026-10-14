@@ -723,7 +723,7 @@ router.post(
     // SMS invite
     await sendSms(
       normalized,
-      `${req.user.name} invited you to join ${group.name} on Chuma. Download the app and sign up with this number to join.`
+      `${req.user.name} invited you to join ${group.name} on Chuma. Download the app and sign up with this number to join: https://play.google.com/store/apps/details?id=com.chuma.zm`
     );
 
     res.json({ message: "Invite sent" });
@@ -800,7 +800,7 @@ router.post(
 
     await sendSms(
       member.phone,
-      `Reminder: ${req.user.name} invited you to join ${group.name} on Chuma. Download the app and sign up with this number to join.`
+      `Reminder: ${req.user.name} invited you to join ${group.name} on Chuma. Download the app and sign up with this number to join: https://play.google.com/store/apps/details?id=com.chuma.zm`
     );
 
     res.json({ message: "Invite resent", lastInviteSentAt: now });

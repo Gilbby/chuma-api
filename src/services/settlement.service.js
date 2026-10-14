@@ -216,7 +216,7 @@ export async function announceGroupActivated(groupId, { feeMessage = true } = {}
     // Straight to SMS: an invitee without an account has no inbox to write to.
     await sendSms(
       m.phone,
-      `${inviterName} invited you to join ${group.name} on Chuma as ${m.role}. Download the app and sign up with this number to join.`
+      `${inviterName} invited you to join ${group.name} on Chuma as ${m.role}. Download the app and sign up with this number to join: https://play.google.com/store/apps/details?id=com.chuma.zm`
     );
   }
 
