@@ -111,6 +111,21 @@ app.use("/api/chilimba", chilimbaRoutes); // rotating-savings draw + round payou
 app.use("/api", miscRoutes); // penalties, notifications, transactions, reports
 app.use("/api/webhooks", webhookRoutes);
 
+// Android App Links verification. An explicit route rather than a file in
+// ../public because express.static skips dot-folders like .well-known.
+app.get("/.well-known/assetlinks.json", (req, res) =>
+  res.json([
+    {
+      relation: ["delegate_permission/common.handle_all_urls"],
+      target: {
+        namespace: "android_app",
+        package_name: config.androidApp.packageName,
+        sha256_cert_fingerprints: config.androidApp.sha256CertFingerprints,
+      },
+    },
+  ])
+);
+
 // Public legal pages (Privacy Policy, Terms, and the account-deletion page the
 // app stores require). Served as plain HTML from ../public with the `.html`
 // extension implied, so the clean URLs /privacy, /terms and /delete-account
