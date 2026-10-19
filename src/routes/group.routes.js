@@ -13,7 +13,11 @@ import {
   requireGroupAdmin,
   ADMIN_ROLES,
 } from "../middleware/groupAuth.js";
-import { paymentLimiter, inviteLimiter } from "../middleware/rateLimits.js";
+import {
+  paymentLimiter,
+  inviteLimiter,
+  joinRequestLimiter,
+} from "../middleware/rateLimits.js";
 import {
   generateReceiptId,
   normalizePhone,
@@ -168,6 +172,84 @@ router.get(
     }
 
     res.json({ invites });
+  })
+);
+
+/**
+ * How the caller stands with a group: "member", "invited" (a pending invite is
+ * waiting on them), "requested" (they asked to join and no admin has answered)
+ * or "none". Matched on userId OR phone, like /invites, so an invite sent to
+ * their number before they signed up still counts.
+ */
+function relationTo(group, user) {
+  const mine = group.members.filter(
+    (m) =>
+      (m.userId && String(m.userId) === String(user._id)) ||
+      (user.phone && m.phone === user.phone)
+  );
+  if (mine.some((m) => m.status === "active")) return "member";
+  if (mine.some((m) => m.status === "pending")) return "invited";
+  if ((group.joinRequests ?? []).some((r) => String(r.userId) === String(user._id)))
+    return "requested";
+  return "none";
+}
+
+/** A chilimba whose payout order is drawn has frozen its membership. */
+const closedToNewMembers = (group) =>
+  isChilimbaGroup(group) && !!group.chilimba?.orderDrawn;
+
+const CLOSED_CHILIMBA_ERROR =
+  "The payout order has been drawn, so this chilimba is closed to new members.";
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const SEARCH_MIN_CHARS = 2;
+const SEARCH_LIMIT = 20;
+
+/**
+ * GET /api/groups/search?q=  (auth) - find any group by name, to ask to join.
+ *
+ * Returns only what someone deciding whether to ask needs: what the group is,
+ * how big, what it asks each member to put in, and who runs it (so two groups
+ * with the same name can be told apart). Balances, loans and the member list
+ * stay private to members. Only active groups are listed - one still waiting
+ * on its registration fee, closing, or closed is not taking anyone.
+ *
+ * Declared before GET /:id so "search" is never read as a group id.
+ */
+router.get(
+  "/search",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const q = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 60) : "";
+    if (q.length < SEARCH_MIN_CHARS) return res.json({ groups: [] });
+
+    const groups = await Group.find({
+      status: "active",
+      name: { $regex: escapeRegex(q), $options: "i" },
+    })
+      .select(
+        "name groupType contributionAmount contributionFrequency chilimba members.userId members.phone members.name members.role members.status joinRequests.userId"
+      )
+      .sort({ name: 1 })
+      .limit(SEARCH_LIMIT)
+      .lean();
+
+    res.json({
+      groups: groups.map((g) => ({
+        id: String(g._id),
+        name: g.name,
+        groupType: g.groupType,
+        memberCount: g.members.filter((m) => m.status === "active").length,
+        contributionAmount: g.contributionAmount,
+        contributionFrequency: g.contributionFrequency,
+        chairpersonName:
+          g.members.find((m) => m.status === "active" && m.role === "Chairperson")?.name ||
+          null,
+        relation: relationTo(g, req.user),
+        closedToNewMembers: closedToNewMembers(g),
+      })),
+    });
   })
 );
 
@@ -702,6 +784,9 @@ router.post(
             status: "pending",
           },
         },
+        // An invite to someone who asked to join answers their request: it
+        // leaves the requests list and waits as an invite instead.
+        ...(invited ? { $pull: { joinRequests: { userId: invited._id } } } : {}),
       }
     );
     if (result.matchedCount === 0)
@@ -887,6 +972,8 @@ router.post(
           "members.$.userId": req.userId,
           "members.$.name": req.user.name,
         },
+        // Joining answers any request to join they made as well.
+        $pull: { joinRequests: { userId: req.userId } },
       }
     );
     // Reflect in the in-memory doc for the response payload only (not persisted).
@@ -983,6 +1070,246 @@ router.post(
     }
 
     res.json({ message: "Invite declined" });
+  })
+);
+
+/**
+ * POST /api/groups/:id/join-request  (auth) - ask to join a group found
+ * through search. Every admin of the group is notified; any one of them can
+ * approve it from the group's members tab.
+ *
+ * Someone who already has an invitation is pointed at it instead (409
+ * already_invited): accepting is one tap and needs nobody else.
+ */
+router.post(
+  "/:id/join-request",
+  requireAuth,
+  requireRealName,
+  joinRequestLimiter,
+  asyncHandler(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id))
+      return res.status(400).json({ error: "Valid group id required" });
+    const group = await Group.findById(req.params.id);
+    if (!group || group.status === "closed" || group.status === "pending-payment")
+      return res.status(404).json({ error: "Group not found" });
+    if (group.status !== "active")
+      return res
+        .status(400)
+        .json({ error: "This group isn't taking new members right now." });
+
+    const relation = relationTo(group, req.user);
+    if (relation === "member")
+      return res.json({ message: "Already a member", alreadyMember: true });
+    if (relation === "invited")
+      return res.status(409).json({
+        error: "You've already been invited to this group. Accept the invitation to join.",
+        code: "already_invited",
+      });
+    if (relation === "requested")
+      return res.json({ message: "Request already sent", alreadyRequested: true });
+    if (closedToNewMembers(group))
+      return res.status(400).json({ error: CLOSED_CHILIMBA_ERROR });
+
+    // Guarded on the requester not being there already, so a double tap (or
+    // two devices) can't queue the same person twice.
+    const result = await Group.updateOne(
+      { _id: group._id, status: "active", "joinRequests.userId": { $ne: req.userId } },
+      {
+        $push: {
+          joinRequests: {
+            userId: req.userId,
+            name: req.user.name,
+            phone: req.user.phone,
+            requestedAt: new Date(),
+          },
+        },
+      }
+    );
+    if (result.modifiedCount === 0)
+      return res.json({ message: "Request already sent", alreadyRequested: true });
+
+    const admins = group.members.filter(
+      (m) => m.status === "active" && m.userId && ADMIN_ROLES.includes(m.role)
+    );
+    if (admins.length > 0) {
+      await Notification.insertMany(
+        admins.map((m) => ({
+          userId: m.userId,
+          type: "join_request",
+          title: "Request to join",
+          body: `${req.user.name} asked to join ${group.name}. Approve or decline it on the group's members tab.`,
+          groupId: group._id,
+          groupName: group.name,
+        }))
+      );
+    }
+
+    res.status(201).json({ message: "Request sent" });
+  })
+);
+
+/**
+ * DELETE /api/groups/:id/join-request  (auth) - withdraw your own request.
+ * Succeeds when there is nothing to withdraw, so a stale button can't error.
+ */
+router.delete(
+  "/:id/join-request",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id))
+      return res.status(400).json({ error: "Valid group id required" });
+    await Group.updateOne(
+      { _id: req.params.id },
+      { $pull: { joinRequests: { userId: req.userId } } }
+    );
+    res.json({ message: "Request withdrawn" });
+  })
+);
+
+/**
+ * POST /api/groups/:id/join-requests/:requestId/approve  (auth, admin)
+ *
+ * The requester becomes an active Member straight away - they asked, an admin
+ * said yes, so there is nothing left for them to accept. Any admin may approve,
+ * the same set that may invite.
+ */
+router.post(
+  "/:id/join-requests/:requestId/approve",
+  requireAuth,
+  requireGroupAdmin("id"),
+  asyncHandler(async (req, res) => {
+    const group = req.group;
+    if (!mongoose.isValidObjectId(req.params.requestId))
+      return res.status(400).json({ error: "Valid requestId required" });
+    const request = group.joinRequests.id(req.params.requestId);
+    if (!request)
+      return res.status(404).json({ error: "This request has already been handled" });
+    if (closedToNewMembers(group))
+      return res.status(400).json({ error: CLOSED_CHILIMBA_ERROR });
+
+    const user = await User.findById(request.userId);
+    if (!user) {
+      await Group.updateOne(
+        { _id: group._id },
+        { $pull: { joinRequests: { _id: request._id } } }
+      );
+      return res
+        .status(410)
+        .json({ error: "This person no longer has a Chuma account" });
+    }
+
+    // They may have been invited (or joined through that invite) since asking.
+    const existing = group.members.filter(
+      (m) =>
+        m.status !== "removed" &&
+        ((m.userId && String(m.userId) === String(user._id)) ||
+          (user.phone && m.phone === user.phone))
+    );
+    if (existing.some((m) => m.status === "active")) {
+      await Group.updateOne(
+        { _id: group._id },
+        { $pull: { joinRequests: { _id: request._id } } }
+      );
+      return res.json({ message: "Already a member", alreadyMember: true });
+    }
+
+    const pending = existing.find((m) => m.status === "pending");
+    let result;
+    if (pending) {
+      // Turn their waiting invite into the membership rather than adding a
+      // second row for the same person. arrayFilters, not the positional $:
+      // this query touches two arrays.
+      result = await Group.updateOne(
+        { _id: group._id, "joinRequests._id": request._id },
+        {
+          $set: {
+            "members.$[m].status": "active",
+            "members.$[m].userId": user._id,
+            "members.$[m].name": user.name,
+          },
+          $pull: { joinRequests: { _id: request._id } },
+        },
+        { arrayFilters: [{ "m._id": pending._id, "m.status": "pending" }] }
+      );
+      await Notification.updateMany(
+        { userId: user._id, groupId: group._id, type: "invite", read: false },
+        { $set: { read: true } }
+      );
+    } else {
+      const now = new Date();
+      result = await Group.updateOne(
+        {
+          _id: group._id,
+          "joinRequests._id": request._id,
+          members: {
+            $not: { $elemMatch: { userId: user._id, status: { $ne: "removed" } } },
+          },
+        },
+        {
+          $push: {
+            members: {
+              userId: user._id,
+              name: user.name,
+              phone: user.phone,
+              role: "Member",
+              invitedByName: req.user.name,
+              invitedAt: now,
+              status: "active",
+            },
+          },
+          $pull: { joinRequests: { _id: request._id } },
+        }
+      );
+    }
+    if (result.modifiedCount === 0)
+      return res.status(409).json({ error: "This request has already been handled" });
+
+    await Notification.create({
+      userId: user._id,
+      type: "join_request",
+      title: "Request approved",
+      body: `${req.user.name} approved your request. You're now a member of ${group.name}.`,
+      groupId: group._id,
+      groupName: group.name,
+    });
+
+    res.json({ message: "Request approved" });
+  })
+);
+
+/**
+ * POST /api/groups/:id/join-requests/:requestId/decline  (auth, admin)
+ * Drops the request and tells the requester. They may ask again later.
+ */
+router.post(
+  "/:id/join-requests/:requestId/decline",
+  requireAuth,
+  requireGroupAdmin("id"),
+  asyncHandler(async (req, res) => {
+    const group = req.group;
+    if (!mongoose.isValidObjectId(req.params.requestId))
+      return res.status(400).json({ error: "Valid requestId required" });
+    const request = group.joinRequests.id(req.params.requestId);
+    if (!request)
+      return res.status(404).json({ error: "This request has already been handled" });
+
+    const result = await Group.updateOne(
+      { _id: group._id, "joinRequests._id": request._id },
+      { $pull: { joinRequests: { _id: request._id } } }
+    );
+    if (result.modifiedCount === 0)
+      return res.status(409).json({ error: "This request has already been handled" });
+
+    await Notification.create({
+      userId: request.userId,
+      type: "join_request",
+      title: "Request declined",
+      body: `Your request to join ${group.name} wasn't accepted.`,
+      groupId: group._id,
+      groupName: group.name,
+    });
+
+    res.json({ message: "Request declined" });
   })
 );
 

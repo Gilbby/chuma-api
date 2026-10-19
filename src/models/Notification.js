@@ -20,6 +20,9 @@ const notificationSchema = new Schema(
         // with Accept/Decline buttons.
         "invite",
         "invite_accepted",
+        // A request to join a group found through search: to the group's admins
+        // when it is made, and back to the requester when it is answered.
+        "join_request",
         "penalty",
         "fee",
         "kyc",

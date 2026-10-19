@@ -32,6 +32,7 @@
     "verify:didit-live": "node scripts/verify-didit-live.mjs",
     "verify:didit-routes": "node scripts/verify-didit-routes.mjs",
     "verify:require-kyc": "node scripts/verify-require-kyc.mjs",
+    "verify:join-requests": "node scripts/verify-join-requests.mjs",
     "role:list": "node scripts/set-member-role.mjs --list",
     "role:set": "node scripts/set-member-role.mjs",
     "member:add": "node scripts/add-group-member.mjs"

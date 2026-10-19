@@ -76,10 +76,22 @@ export const inviteLimiter = rateLimit({
   message: { error: "Too many invites this hour. Try again later." },
 });
 
+/** Each join request notifies every admin of the group - cap it per user so
+ *  one account can't spam groups it found through search. */
+export const joinRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => String(req.userId),
+  message: { error: "Too many join requests this hour. Try again later." },
+});
+
 export default {
   apiLimiter,
   otpRequestLimiter,
   otpVerifyLimiter,
   paymentLimiter,
   inviteLimiter,
+  joinRequestLimiter,
 };

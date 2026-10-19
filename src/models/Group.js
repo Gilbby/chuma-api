@@ -97,6 +97,20 @@ const chilimbaSchema = new Schema(
   { _id: false }
 );
 
+// Someone who found the group through search and asked to be let in. Kept
+// apart from `members` on purpose: a requester is neither invited nor a member,
+// and every headcount, permission check and payout loop reads `members`. An
+// admin approving the request is what turns it into a member row.
+const joinRequestSchema = new Schema(
+  {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    name: { type: String },
+    phone: { type: String },
+    requestedAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 const groupSchema = new Schema(
   {
     name: { type: String, required: true },
@@ -192,6 +206,10 @@ const groupSchema = new Schema(
     },
 
     members: [memberSchema],
+
+    // Asks to join from people who found the group through search. Admins
+    // approve (they become active members) or decline (the row is dropped).
+    joinRequests: { type: [joinRequestSchema], default: [] },
 
     // Named savings projects. Project-fund types (church - see
     // PROJECT_FUND_TYPES in logic.service.js) must have at least one from
