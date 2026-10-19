@@ -1142,6 +1142,25 @@ router.post(
           groupName: group.name,
         }))
       );
+
+      // And by SMS, so a request doesn't sit unseen until an admin next opens
+      // the app. Sent to the number on each admin's account, which is the one
+      // they sign in with, rather than the member row's copy, which can drift.
+      // The request is already saved, so an SMS failure must not undo it.
+      try {
+        const adminUsers = await User.find({ _id: { $in: admins.map((m) => m.userId) } })
+          .select("phone")
+          .lean();
+        const phones = [...new Set(adminUsers.map((u) => u.phone).filter(Boolean))];
+        if (phones.length > 0) {
+          await sendSms(
+            phones,
+            `${req.user.name} asked to join ${group.name} on Chuma. Open the app to approve or decline.`
+          );
+        }
+      } catch (e) {
+        console.warn(`[join-request] SMS to admins failed: ${e.message}`);
+      }
     }
 
     res.status(201).json({ message: "Request sent" });
