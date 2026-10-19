@@ -32,6 +32,8 @@ import shareoutRoutes from "./routes/shareout.routes.js";
 import chilimbaRoutes from "./routes/chilimba.routes.js";
 import miscRoutes from "./routes/misc.routes.js";
 import webhookRoutes from "./routes/webhook.routes.js";
+import linkRoutes from "./routes/link.routes.js";
+import joinPageRoutes from "./routes/joinPage.routes.js";
 
 const app = express();
 
@@ -110,6 +112,11 @@ app.use("/api/shareout", shareoutRoutes);
 app.use("/api/chilimba", chilimbaRoutes); // rotating-savings draw + round payouts
 app.use("/api", miscRoutes); // penalties, notifications, transactions, reports
 app.use("/api/webhooks", webhookRoutes);
+app.use("/api/links", linkRoutes); // what a /join/<code> link points at
+
+// Join links (personal invites and group share links). The app opens these
+// itself when installed; otherwise this page explains what the link is for.
+app.use("/join", joinPageRoutes);
 
 // Android App Links verification. An explicit route rather than a file in
 // ../public because express.static skips dot-folders like .well-known.

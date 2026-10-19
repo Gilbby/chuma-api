@@ -204,6 +204,20 @@ export const config = {
     code: process.env.REVIEW_OTP || "",
   },
 
+  // Join links: <joinBaseUrl>/join/<code>. Every link the API hands out is
+  // built from this one address, so moving to another domain is a one-line
+  // change here (links already shared on the old address stop working). It
+  // must be the host the app's intent filter and assetlinks.json cover.
+  links: {
+    joinBaseUrl: (process.env.JOIN_LINK_BASE_URL || "https://chuma-api.onrender.com").replace(
+      /\/+$/,
+      ""
+    ),
+    // A group's share link lasts this long; sharing after that makes a new one.
+    shareLinkDays: 7,
+    playStoreUrl: "https://play.google.com/store/apps/details?id=com.chuma.zm",
+  },
+
   // Android App Links: served at /.well-known/assetlinks.json so Android opens
   // links on this host straight in the app. The fingerprints are the SHA-256 of
   // the signing certificates (Play Console -> App integrity -> App signing):
