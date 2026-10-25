@@ -32,8 +32,6 @@ import shareoutRoutes from "./routes/shareout.routes.js";
 import chilimbaRoutes from "./routes/chilimba.routes.js";
 import miscRoutes from "./routes/misc.routes.js";
 import webhookRoutes from "./routes/webhook.routes.js";
-import linkRoutes from "./routes/link.routes.js";
-import joinPageRoutes from "./routes/joinPage.routes.js";
 
 const app = express();
 
@@ -112,26 +110,6 @@ app.use("/api/shareout", shareoutRoutes);
 app.use("/api/chilimba", chilimbaRoutes); // rotating-savings draw + round payouts
 app.use("/api", miscRoutes); // penalties, notifications, transactions, reports
 app.use("/api/webhooks", webhookRoutes);
-app.use("/api/links", linkRoutes); // what a /join/<code> link points at
-
-// Join links (personal invites and group share links). The app opens these
-// itself when installed; otherwise this page explains what the link is for.
-app.use("/join", joinPageRoutes);
-
-// Android App Links verification. An explicit route rather than a file in
-// ../public because express.static skips dot-folders like .well-known.
-app.get("/.well-known/assetlinks.json", (req, res) =>
-  res.json([
-    {
-      relation: ["delegate_permission/common.handle_all_urls"],
-      target: {
-        namespace: "android_app",
-        package_name: config.androidApp.packageName,
-        sha256_cert_fingerprints: config.androidApp.sha256CertFingerprints,
-      },
-    },
-  ])
-);
 
 // Public legal pages (Privacy Policy, Terms, and the account-deletion page the
 // app stores require). Served as plain HTML from ../public with the `.html`

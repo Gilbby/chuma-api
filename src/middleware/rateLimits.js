@@ -87,20 +87,8 @@ export const joinRequestLimiter = rateLimit({
   message: { error: "Too many join requests this hour. Try again later." },
 });
 
-/** The public /join/<code> page reads the database for anyone, signed in or
- *  not. Per-IP and CGNAT-generous: real people open a link a handful of
- *  times; this only stops a single machine walking codes. */
-export const joinPageLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: "Too many requests. Please try again in a few minutes.",
-});
-
 export default {
   apiLimiter,
-  joinPageLimiter,
   otpRequestLimiter,
   otpVerifyLimiter,
   paymentLimiter,

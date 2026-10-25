@@ -6,7 +6,6 @@ import { Transaction } from "../models/Transaction.js";
 import { advancePaidThrough } from "./logic.service.js";
 import { notify, notifyAll } from "./notify.service.js";
 import { sendSms } from "./sms.service.js";
-import { ensureInviteCode, inviteSmsText } from "./joinLink.service.js";
 
 /**
  * Settlement service - the ONLY place payment side effects are applied.
@@ -215,10 +214,9 @@ export async function announceGroupActivated(groupId, { feeMessage = true } = {}
       });
     }
     // Straight to SMS: an invitee without an account has no inbox to write to.
-    const code = await ensureInviteCode(group._id, m);
     await sendSms(
       m.phone,
-      inviteSmsText({ inviterName, groupName: group.name, role: m.role, code })
+      `${inviterName} invited you to join ${group.name} on Chuma as ${m.role}. Download the app and sign up with this number to join: https://play.google.com/store/apps/details?id=com.chuma.zm`
     );
   }
 

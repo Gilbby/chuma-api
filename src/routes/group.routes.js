@@ -35,17 +35,7 @@ import {
   getRequiredApprovals,
   isProjectFundGroup,
   isChilimbaGroup,
-  closedToNewMembers,
-  relationTo,
 } from "../services/logic.service.js";
-import {
-  newLinkCode,
-  joinUrl,
-  ensureInviteCode,
-  ensureShareLink,
-  resetShareLink,
-  inviteSmsText,
-} from "../services/joinLink.service.js";
 import {
   initiateDeposit,
   providerFromPhone,
@@ -92,15 +82,9 @@ function sanitizeProject(raw, userId) {
   };
 }
 
-/**
- * Attach computed fee/lock status to a group object for responses. Also the
- * one place link codes are stripped: every member can read a group, but only
- * admins may hand out its share link or an invite's personal link (they get
- * those from the dedicated link endpoints).
- */
+/** Attach computed fee/lock status to a group object for responses. */
 function withFeeStatus(group) {
-  const { shareLink, ...g } = group.toObject ? group.toObject() : group;
-  g.members = (g.members ?? []).map(({ inviteCode, ...m }) => m);
+  const g = group.toObject ? group.toObject() : group;
   const grace = getGraceInfo(g);
   return {
     ...g,
@@ -190,6 +174,29 @@ router.get(
     res.json({ invites });
   })
 );
+
+/**
+ * How the caller stands with a group: "member", "invited" (a pending invite is
+ * waiting on them), "requested" (they asked to join and no admin has answered)
+ * or "none". Matched on userId OR phone, like /invites, so an invite sent to
+ * their number before they signed up still counts.
+ */
+function relationTo(group, user) {
+  const mine = group.members.filter(
+    (m) =>
+      (m.userId && String(m.userId) === String(user._id)) ||
+      (user.phone && m.phone === user.phone)
+  );
+  if (mine.some((m) => m.status === "active")) return "member";
+  if (mine.some((m) => m.status === "pending")) return "invited";
+  if ((group.joinRequests ?? []).some((r) => String(r.userId) === String(user._id)))
+    return "requested";
+  return "none";
+}
+
+/** A chilimba whose payout order is drawn has frozen its membership. */
+const closedToNewMembers = (group) =>
+  isChilimbaGroup(group) && !!group.chilimba?.orderDrawn;
 
 const CLOSED_CHILIMBA_ERROR =
   "The payout order has been drawn, so this chilimba is closed to new members.";
@@ -608,7 +615,6 @@ router.post(
           invitedByName: req.user.name,
           invitedAt: now,
           lastInviteSentAt: now,
-          inviteCode: newLinkCode(),
           status: "pending",
         })),
       ],
@@ -763,7 +769,6 @@ router.post(
       ];
     }
 
-    const inviteCode = newLinkCode();
     const result = await Group.updateOne(
       filter,
       {
@@ -776,7 +781,6 @@ router.post(
             invitedByName: req.user.name,
             invitedAt: new Date(),
             lastInviteSentAt: new Date(),
-            inviteCode,
             status: "pending",
           },
         },
@@ -801,10 +805,10 @@ router.post(
       });
     }
 
-    // SMS invite, carrying the invite's personal link
+    // SMS invite
     await sendSms(
       normalized,
-      inviteSmsText({ inviterName: req.user.name, groupName: group.name, role, code: inviteCode })
+      `${req.user.name} invited you to join ${group.name} on Chuma. Download the app and sign up with this number to join: https://play.google.com/store/apps/details?id=com.chuma.zm`
     );
 
     res.json({ message: "Invite sent" });
@@ -879,17 +883,9 @@ router.post(
       });
     }
 
-    // Invites made before links existed get their code here.
-    const code = await ensureInviteCode(group._id, member);
     await sendSms(
       member.phone,
-      inviteSmsText({
-        inviterName: req.user.name,
-        groupName: group.name,
-        role: member.role,
-        code,
-        reminder: true,
-      })
+      `Reminder: ${req.user.name} invited you to join ${group.name} on Chuma. Download the app and sign up with this number to join: https://play.google.com/store/apps/details?id=com.chuma.zm`
     );
 
     res.json({ message: "Invite resent", lastInviteSentAt: now });
@@ -933,80 +929,6 @@ router.delete(
     }
 
     res.json({ message: "Invite cancelled" });
-  })
-);
-
-/**
- * POST /api/groups/:id/invite/:memberId/link  (auth, admin) - the personal
- * link for a pending invite, for an admin to pass on by WhatsApp or any other
- * way the SMS didn't reach. Only the invited number can accept through it, and
- * it stops working once the invite is accepted, declined or withdrawn. POST
- * because invites made before links existed get their code created here.
- */
-router.post(
-  "/:id/invite/:memberId/link",
-  requireAuth,
-  requireGroupAdmin("id"),
-  asyncHandler(async (req, res) => {
-    const group = req.group;
-    if (!mongoose.isValidObjectId(req.params.memberId))
-      return res.status(400).json({ error: "Valid memberId required" });
-    const member = group.members.id(req.params.memberId);
-    if (!member) return res.status(404).json({ error: "Invite not found" });
-    if (member.status !== "pending")
-      return res.status(400).json({
-        error:
-          member.status === "active"
-            ? "This person has already joined the group"
-            : "This person is no longer invited to the group",
-      });
-
-    const code = await ensureInviteCode(group._id, member);
-    if (!code) return res.status(409).json({ error: "This invite has just been answered" });
-    res.json({ url: joinUrl(code) });
-  })
-);
-
-/** Why a group can't hand out a share link right now, or null if it can. */
-function shareLinkBlocker(group) {
-  if (group.status !== "active") return "This group isn't taking new members right now.";
-  if (closedToNewMembers(group)) return CLOSED_CHILIMBA_ERROR;
-  return null;
-}
-
-/**
- * POST /api/groups/:id/share-link  (auth, admin) - the group's share link.
- * Anyone who opens it can ask to join; an admin still approves each request.
- * Returns the current link while it is valid and makes a fresh one once it
- * has expired, so "share" always hands out something that works.
- */
-router.post(
-  "/:id/share-link",
-  requireAuth,
-  requireGroupAdmin("id"),
-  asyncHandler(async (req, res) => {
-    const blocked = shareLinkBlocker(req.group);
-    if (blocked) return res.status(400).json({ error: blocked });
-    const link = await ensureShareLink(req.group, req.userId);
-    if (!link) return res.status(409).json({ error: "Couldn't create the link. Try again." });
-    res.json({ url: joinUrl(link.code), expiresAt: link.expiresAt });
-  })
-);
-
-/**
- * POST /api/groups/:id/share-link/reset  (auth, admin) - replace the share
- * link. The old one stops working at once; requests already made through it
- * stay in the requests list for an admin to answer.
- */
-router.post(
-  "/:id/share-link/reset",
-  requireAuth,
-  requireGroupAdmin("id"),
-  asyncHandler(async (req, res) => {
-    const blocked = shareLinkBlocker(req.group);
-    if (blocked) return res.status(400).json({ error: blocked });
-    const link = await resetShareLink(req.group, req.userId);
-    res.json({ url: joinUrl(link.code), expiresAt: link.expiresAt });
   })
 );
 

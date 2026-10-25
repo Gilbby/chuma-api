@@ -40,29 +40,6 @@ export function isChilimbaGroup(group) {
   return CHILIMBA_TYPES.includes(type);
 }
 
-/** A chilimba whose payout order is drawn has frozen its membership. */
-export const closedToNewMembers = (group) =>
-  isChilimbaGroup(group) && !!group.chilimba?.orderDrawn;
-
-/**
- * How a user stands with a group: "member", "invited" (a pending invite is
- * waiting on them), "requested" (they asked to join and no admin has answered)
- * or "none". Matched on userId OR phone, like GET /groups/invites, so an invite
- * sent to their number before they signed up still counts.
- */
-export function relationTo(group, user) {
-  const mine = group.members.filter(
-    (m) =>
-      (m.userId && String(m.userId) === String(user._id)) ||
-      (user.phone && m.phone === user.phone)
-  );
-  if (mine.some((m) => m.status === "active")) return "member";
-  if (mine.some((m) => m.status === "pending")) return "invited";
-  if ((group.joinRequests ?? []).some((r) => String(r.userId) === String(user._id)))
-    return "requested";
-  return "none";
-}
-
 // ─── SHARE-OUT (shareOut.ts) ────────────────────────────────────────────────
 
 export function computeShareOut(members, totalProfit) {
@@ -539,8 +516,6 @@ export default {
   isProjectFundGroup,
   CHILIMBA_TYPES,
   isChilimbaGroup,
-  closedToNewMembers,
-  relationTo,
   computeShareOut,
   estimateGroupProfit,
   getMaxLoan,

@@ -17,10 +17,6 @@ const memberSchema = new Schema(
     invitedByName: { type: String },
     invitedAt: { type: Date }, // when the invite was first created
     lastInviteSentAt: { type: Date }, // last time the SMS/notification went out
-    // The code in this invite's personal link (/join/<code>). Only meaningful
-    // while the row is pending, and only the invited number can accept through
-    // it. Admin-only: withFeeStatus strips it from every group response.
-    inviteCode: { type: String },
     savings: { type: Number, default: 0 }, // this member's savings in the group
     contributions: { type: Number, default: 0 }, // count of contributions made
     loanActive: { type: Number, default: 0 }, // outstanding loan amount
@@ -97,19 +93,6 @@ const chilimbaSchema = new Schema(
     orderDrawnAt: { type: Date },
     currentRound: { type: Number, default: 0 },
     totalRounds: { type: Number },
-  },
-  { _id: false }
-);
-
-// The group's share link (/join/<code>): anyone who opens it can ask to join,
-// and an admin approves the request as usual. It lasts a fixed time (see
-// config.links.shareLinkDays); an admin can reset it, which kills the old code.
-const shareLinkSchema = new Schema(
-  {
-    code: { type: String, required: true },
-    expiresAt: { type: Date, required: true },
-    createdAt: { type: Date, default: Date.now },
-    createdBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { _id: false }
 );
@@ -228,9 +211,6 @@ const groupSchema = new Schema(
     // approve (they become active members) or decline (the row is dropped).
     joinRequests: { type: [joinRequestSchema], default: [] },
 
-    // Admin-only, like members[].inviteCode: stripped by withFeeStatus.
-    shareLink: { type: shareLinkSchema, default: undefined },
-
     // Named savings projects. Project-fund types (church - see
     // PROJECT_FUND_TYPES in logic.service.js) must have at least one from
     // creation; every other type leaves this empty.
@@ -269,9 +249,6 @@ const groupSchema = new Schema(
 
 // "My groups" is the hottest query: Group.find({ "members.userId": ... })
 groupSchema.index({ "members.userId": 1 });
-// Opening a join link looks the code up across every group.
-groupSchema.index({ "shareLink.code": 1 }, { sparse: true });
-groupSchema.index({ "members.inviteCode": 1 }, { sparse: true });
 
 export const Group = mongoose.model("Group", groupSchema);
 export default Group;

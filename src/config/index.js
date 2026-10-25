@@ -204,34 +204,6 @@ export const config = {
     code: process.env.REVIEW_OTP || "",
   },
 
-  // Join links: <joinBaseUrl>/join/<code>. Every link the API hands out is
-  // built from this one address, so moving to another domain is a one-line
-  // change here (links already shared on the old address stop working). It
-  // must be the host the app's intent filter and assetlinks.json cover.
-  links: {
-    joinBaseUrl: (process.env.JOIN_LINK_BASE_URL || "https://chuma-api.onrender.com").replace(
-      /\/+$/,
-      ""
-    ),
-    // A group's share link lasts this long; sharing after that makes a new one.
-    shareLinkDays: 7,
-    playStoreUrl: "https://play.google.com/store/apps/details?id=com.chuma.zm",
-  },
-
-  // Android App Links: served at /.well-known/assetlinks.json so Android opens
-  // links on this host straight in the app. The fingerprints are the SHA-256 of
-  // the signing certificates (Play Console -> App integrity -> App signing):
-  // both Play app signing keys (current + previous, which Play installs carry)
-  // and the upload key (builds installed outside Play). They are public.
-  androidApp: {
-    packageName: "com.chuma.zm",
-    sha256CertFingerprints: [
-      "99:9E:DC:D9:15:E0:CB:6C:60:74:18:84:F5:E3:57:29:91:0E:56:63:D9:F7:65:8D:B2:51:3B:B1:18:CC:E9:C4",
-      "D4:17:50:8A:CB:B1:24:EB:DF:7C:94:3F:D0:5C:5F:13:62:77:3A:EB:F9:C2:E0:8E:FE:C9:C3:65:8E:2D:0D:A2",
-      "FC:DB:2F:C0:74:78:CA:45:BA:0B:1D:98:E0:DB:72:A5:51:A7:2F:2E:F5:FE:14:3C:33:9A:BE:F9:34:84:CB:12",
-    ],
-  },
-
   africasTalking: {
     username: process.env.AT_USERNAME || "sandbox",
     apiKey: process.env.AT_API_KEY || "",
