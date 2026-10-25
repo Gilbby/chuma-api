@@ -46,9 +46,21 @@ export function detectNetwork(phone) {
   return { network: "Unknown", color: "#9CA3AF" };
 }
 
-/** Normalise a Zambian phone to +260XXXXXXXXX. */
+/**
+ * Normalise a phone to E.164 (+<country><national>).
+ *
+ * The app sends a full E.164 string once a country is chosen in the dial-code
+ * picker (e.g. "+254712345678"); a leading "+" means the country code is
+ * already there, so trust it and never apply the Zambian heuristics (a Kenyan
+ * number must not be rewritten to +260). Bare input with no "+" is still taken
+ * as Zambian for back-compat - legacy clients, SMS replies, seeds and the
+ * reviewer number all pass numbers that way.
+ */
 export function normalizePhone(phone) {
-  const digits = String(phone).replace(/\D/g, "");
+  const raw = String(phone ?? "").trim();
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return "";
+  if (raw.startsWith("+")) return "+" + digits; // explicit country code - trust it
   if (digits.startsWith("260")) return "+" + digits;
   if (digits.startsWith("0")) return "+260" + digits.slice(1);
   if (digits.length === 9) return "+260" + digits;
