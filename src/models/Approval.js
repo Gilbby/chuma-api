@@ -57,6 +57,15 @@ const approvalSchema = new Schema(
     // answer it; this records who it was ADDRESSED to.
     confirmerRole: { type: String, enum: ["Treasurer", "Chairperson"] },
 
+    // cash-receipt on a project-fund (church) group: how the member says the
+    // money reached the church, the reference of a bank / mobile-money
+    // transfer, and the project it was given toward (absent = General
+    // giving). Shown on the receipt so the confirmer knows what to look for:
+    // notes in their hand, or a transfer in the church account.
+    channel: { type: String, enum: ["cash", "bank", "mobile-money"] },
+    reference: { type: String },
+    projectName: { type: String },
+
     // Who a "member-removal" is about. They may hold an admin role themselves,
     // and nobody votes on their own removal - the vote route reads this to keep
     // them out of the quorum that decides it.

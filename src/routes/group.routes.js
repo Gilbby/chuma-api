@@ -41,6 +41,7 @@ import {
   providerFromPhone,
 } from "../services/pawapay.service.js";
 import { sendSms } from "../services/sms.service.js";
+import { computeGroupFunds, recordDelivery } from "../services/funds.service.js";
 import { notify, notifyAll } from "../services/notify.service.js";
 import {
   settleCompletedTransaction,
@@ -330,6 +331,57 @@ router.post(
     );
 
     res.status(201).json({ project: created });
+  })
+);
+
+/**
+ * GET /api/groups/:id/funds  (auth, member) - where a church group's money is.
+ *
+ * Totals per project (and General giving): raised, cash still with the cash
+ * handler, deposited to bank / mobile money, and paid out - plus the most
+ * recent deliveries. Every member may see it: it says where the church's money
+ * went, never who gave what. See funds.service.js.
+ */
+router.get(
+  "/:id/funds",
+  requireAuth,
+  requireGroupMember("id"),
+  asyncHandler(async (req, res) => {
+    if (!isProjectFundGroup(req.group))
+      return res
+        .status(400)
+        .json({ error: "Only church groups track where their cash went" });
+    res.json({ funds: await computeGroupFunds(req.group) });
+  })
+);
+
+/**
+ * POST /api/groups/:id/deliveries  (auth, cash handler) - declare where cash
+ * the caller was holding went.
+ * Body: { sourceProjectId (null = General giving), destination
+ *         ("bank" | "mobile-money" | "project"), amount, targetProjectId?,
+ *         reference?, payee? }
+ *    or { all: true, destination ("bank" | "mobile-money"), reference? } to
+ *       pay out everything in hand at once.
+ *
+ * The cash handler is the Treasurer, or the Chairperson in a group with no
+ * Treasurer. The amount can never be more than that pile's cash still in hand.
+ */
+router.post(
+  "/:id/deliveries",
+  requireAuth,
+  requireRealName,
+  paymentLimiter,
+  requireGroupMember("id"),
+  asyncHandler(async (req, res) => {
+    const out = await recordDelivery({
+      group: req.group,
+      member: req.member,
+      user: req.user,
+      body: req.body,
+    });
+    if (out.error) return res.status(out.status).json({ error: out.error });
+    res.status(201).json(out);
   })
 );
 

@@ -15,6 +15,7 @@ import {
 } from "../services/pawapay.service.js";
 import { settleCompletedTransaction } from "../services/settlement.service.js";
 import { raiseCashReceipt } from "../services/cashReceipt.service.js";
+import { GIVING_CHANNELS } from "../services/funds.service.js";
 import { priceContribution } from "../services/pricing.service.js";
 import { config } from "../config/index.js";
 
@@ -45,6 +46,9 @@ const MAX_ITEMS = 20; // per obligation kind - nobody legitimately owes hundreds
  *   repayments?    ([{ loanId, amount }]),
  *   penaltyIds?    ([penaltyId]),
  *   projectId?     (project-fund groups: which project the savings pay into),
+ *   channel?       (project-fund groups: "cash" | "bank" | "mobile-money" -
+ *                   how the money reached the church; default "cash"),
+ *   reference?     (channel bank / mobile-money: the transfer's reference),
  *   paymentMethod  ("MTN MoMo" | "Airtel Money" | "Zamtel Kwacha" | "Cash" | ...),
  *   payerPhone?
  * }
@@ -160,6 +164,28 @@ router.post(
       }
     }
 
+    // ── Project-fund groups: how the money reached the church ─────────────────
+    // Cash goes through the cash handler's hands; "bank" / "mobile-money" mean
+    // the member paid the church's own account directly. All three are manual -
+    // the cash handler confirms them - so the request still comes in as "Cash"
+    // and the transaction records the real method. See funds.service.js.
+    let channel = null;
+    let reference;
+    if (isProjectFundGroup(group)) {
+      channel = GIVING_CHANNELS.includes(req.body.channel) ? req.body.channel : "cash";
+      if (channel !== "cash") {
+        if (paymentMethod !== "Cash")
+          return res.status(400).json({
+            error: "A transfer to the church account is confirmed by the treasurer, not paid through the app",
+          });
+        reference = String(req.body.reference ?? "").trim().slice(0, 60);
+        if (reference.length < 3)
+          return res.status(400).json({
+            error: "Enter the reference of your transfer so the treasurer can find it",
+          });
+      }
+    }
+
     // ── The grand total: what the member pays in one go ───────────────────────
     const grandBase = contribution + topup + loanTotal + penaltyTotal;
     if (!(grandBase > 0))
@@ -230,7 +256,12 @@ router.post(
       depositAmount: breakdown.depositAmount, // grossed-up total charged (face value for cash)
       platformFee: breakdown.platformFee, // platform revenue on this txn (never pooled)
       networkFee: breakdown.networkFee, // member's own MMO fee (display-only)
-      paymentMethod,
+      paymentMethod:
+        channel === "bank"
+          ? "Bank Transfer"
+          : channel === "mobile-money"
+            ? "Mobile Money"
+            : paymentMethod,
       status: "pending",
       note: `Combined payment: ${parts.join(", ")}`,
       receiptId: generateReceiptId("CHM"),
@@ -240,6 +271,8 @@ router.post(
         repayments,
         penaltyIds: sanitizedPenaltyIds,
         projectId,
+        ...(channel ? { channel } : {}),
+        ...(reference ? { reference } : {}),
       },
     });
     await txn.validate(); // ValidationError → 400 via the error middleware

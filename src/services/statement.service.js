@@ -1,3 +1,5 @@
+import { CashDelivery } from "../models/CashDelivery.js";
+import { GENERAL_GIVING_LABEL } from "./funds.service.js";
 import { Transaction } from "../models/Transaction.js";
 import { Group } from "../models/Group.js";
 import { generateReceiptId } from "../utils/helpers.js";
@@ -78,6 +80,10 @@ const PURPOSE_LABELS = {
   "profit-share": "Profit share",
   "chilimba-payout": "Chilimba payout received",
   withdrawal: "Withdrawal",
+  // Church groups: held cash the cash handler paid out for a project.
+  "project-payout": "Paid out for projects",
+  // Church groups: General giving paid out for no project in particular.
+  "other-payout": "Other payouts",
   other: "Other",
 };
 
@@ -93,6 +99,8 @@ const PURPOSE_ORDER = [
   "profit-share",
   "chilimba-payout",
   "withdrawal",
+  "project-payout",
+  "other-payout",
   "other",
 ];
 
@@ -458,6 +466,62 @@ export async function buildStatement({ user, groupId, from, to, scope = "member"
       }
     }
   }
+  // Church groups: where the cash handler said held cash went (see
+  // funds.service.js). Only the church's own book carries these - they move
+  // the group's money, not any member's. A deposit to the church bank or
+  // mobile money only moves money the church still holds, so it is listed but
+  // is neither in nor out ("transfer"); a payout for a project is money
+  // leaving the church, and counts as money out.
+  if (forGroup && groupId) {
+    const church = await Group.findById(groupId).select("name groupType projects").lean();
+    if (church && isProjectFundGroup(church)) {
+      const nameOf = (id) =>
+        id
+          ? (church.projects || []).find((p) => String(p._id) === String(id))?.name ?? "Project"
+          : GENERAL_GIVING_LABEL;
+      const payouts = await CashDelivery.find({ groupId, date: { $gte: from, $lte: to } })
+        .sort({ date: 1 })
+        .lean();
+      for (const d of payouts) {
+        const spent = d.destination === "project";
+        const amount = Number(d.amount) || 0;
+        activity.push({
+          id: `payout-${d._id}`,
+          date: d.date,
+          type: "payout",
+          groupName: church.name ?? "",
+          memberName: d.recordedByName ?? "",
+          description: spent
+            ? `Paid out${d.targetProjectId ? ` for ${nameOf(d.targetProjectId)}` : ""}${d.payee ? ` · ${d.payee}` : ""}`
+            : `Deposited to church ${d.destination === "bank" ? "bank account" : "mobile money"} · ${nameOf(d.sourceProjectId)}`,
+          projectLabel: null,
+          note: d.reference ?? "",
+          amount,
+          direction: spent ? "out" : "transfer",
+          status: "completed",
+          receiptId: null,
+        });
+        if (spent) {
+          totals.moneyOut += amount;
+          const bucket = (totals.byType.payout ??= { count: 0, in: 0, out: 0 });
+          bucket.count += 1;
+          bucket.out += amount;
+          const key = d.targetProjectId ? "project-payout" : "other-payout";
+          const row = (byPurpose.out[key] ??= {
+            key,
+            label: PURPOSE_LABELS[key],
+            amount: 0,
+            count: 0,
+          });
+          row.amount += amount;
+          row.count += 1;
+        }
+      }
+      // A statement reads forwards: slot the payouts in among the giving.
+      activity.sort((a, b) => new Date(a.date) - new Date(b.date));
+    }
+  }
+
   totals.net = totals.moneyIn - totals.moneyOut;
 
   // Round for display, then make the rows tie to the total they sit under. Any

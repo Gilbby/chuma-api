@@ -47,6 +47,40 @@ const LABELS = {
 const labelFor = (txn) => LABELS[txn.type] || "payment";
 
 /**
+ * How the money arrived, in words. Church giving can come as a transfer
+ * straight into the church's bank / mobile-money account instead of notes
+ * (meta.channel - see funds.service.js); the receipt and every message about
+ * it must say which, or a treasurer goes looking for cash nobody handed over.
+ */
+function arrival(txn) {
+  const channel = txn.meta?.channel;
+  const ref = txn.meta?.reference ? ` (ref ${txn.meta.reference})` : "";
+  if (channel === "bank")
+    return {
+      channel,
+      noun: "bank transfer",
+      said: `transferred K${Math.abs(txn.amount)} into the church bank account${ref}`,
+      check: "Approve once you see it in the account.",
+      confirm: "confirmed the bank transfer",
+    };
+  if (channel === "mobile-money")
+    return {
+      channel,
+      noun: "mobile money transfer",
+      said: `sent K${Math.abs(txn.amount)} to the church mobile money${ref}`,
+      check: "Approve once you see it in the account.",
+      confirm: "confirmed the mobile money transfer",
+    };
+  return {
+    channel: channel || null,
+    noun: "cash",
+    said: `handed over K${Math.abs(txn.amount)} in cash`,
+    check: "Approve once you have the money.",
+    confirm: "confirmed receiving the cash",
+  };
+}
+
+/**
  * Raise the receipt for a pending cash transaction: one approval for the group's
  * record, plus a notification to whoever should be holding the money.
  *
@@ -58,6 +92,12 @@ const labelFor = (txn) => LABELS[txn.type] || "payment";
 export async function raiseCashReceipt({ group, txn, payerName }) {
   const amount = Math.abs(txn.amount);
   const label = labelFor(txn);
+  const how = arrival(txn);
+  // Church giving names what it was for, so the confirmer sees it too.
+  const project = txn.meta?.projectId
+    ? (group.projects || []).find((p) => String(p._id) === String(txn.meta.projectId))
+    : null;
+  const projectName = project?.name ?? (how.channel ? "General giving" : undefined);
 
   const active = group.members.filter((m) => m.status === "active" && m.userId);
   const treasurers = active.filter((m) => m.role === "Treasurer");
@@ -72,13 +112,16 @@ export async function raiseCashReceipt({ group, txn, payerName }) {
     groupId: group._id,
     groupName: group.name,
     type: "cash-receipt",
-    title: `Cash ${label} - ${payerName}`,
-    description: `${payerName} says they handed over K${amount} in cash. Approve once you have the money.`,
+    title: how.noun === "cash" ? `Cash ${label} - ${payerName}` : `${how.noun[0].toUpperCase()}${how.noun.slice(1)} - ${payerName}`,
+    description: `${payerName} says they ${how.said}. ${how.check}`,
     amount,
     requestedById: txn.memberId,
     requestedBy: payerName,
     refId: txn._id,
     confirmerRole,
+    ...(how.channel
+      ? { channel: how.channel, reference: txn.meta?.reference, projectName }
+      : {}),
     // One admin. The cash is in someone's hands or it isn't; a second opinion
     // adds nothing but a delay to the member's savings.
     requiredApprovals: 1,
@@ -90,13 +133,19 @@ export async function raiseCashReceipt({ group, txn, payerName }) {
     recipients.map((m) => m.userId),
     {
       type: "contribution",
-      title: `Cash ${label} - confirm receipt`,
-      body: `${payerName} recorded a K${amount} cash ${label} to ${group.name}. Confirm you received the cash to credit it.`,
+      title: how.noun === "cash" ? `Cash ${label} - confirm receipt` : `${how.noun[0].toUpperCase()}${how.noun.slice(1)} - confirm receipt`,
+      body:
+        how.noun === "cash"
+          ? `${payerName} recorded a K${amount} cash ${label} to ${group.name}. Confirm you received the cash to credit it.`
+          : `${payerName} says they ${how.said} for ${group.name}. Confirm it once you see it to credit it.`,
       groupId: group._id,
       groupName: group.name,
       transactionId: txn._id,
       sms: true,
-      smsText: `Chuma: ${payerName} says they handed you K${amount} cash for ${group.name}. Confirm it in the app to credit their account.`,
+      smsText:
+        how.noun === "cash"
+          ? `Chuma: ${payerName} says they handed you K${amount} cash for ${group.name}. Confirm it in the app to credit their account.`
+          : `Chuma: ${payerName} says they ${how.said} for ${group.name}. Confirm it in the app once you see it.`,
     }
   );
 
@@ -117,13 +166,13 @@ export async function resolveCashReceipt({ txn, admin, received }) {
     received
       ? {
           status: "completed",
-          note: `${txn.note} - cash received by ${admin.name}`,
+          note: `${txn.note} - ${arrival(txn).noun === "cash" ? "cash received" : `${arrival(txn).noun} confirmed`} by ${admin.name}`,
           "meta.cashConfirmedBy": admin.userId,
           "meta.cashConfirmedByName": admin.name,
         }
       : {
           status: "failed",
-          note: `${txn.note} - cash not received (declined by ${admin.name})`,
+          note: `${txn.note} - ${arrival(txn).noun} not received (declined by ${admin.name})`,
           "meta.cashConfirmedBy": admin.userId,
           "meta.cashConfirmedByName": admin.name,
         },
@@ -160,13 +209,19 @@ export async function resolveCashReceipt({ txn, admin, received }) {
         chairs.map((m) => m.userId),
         {
           type: "governance",
-          title: `Cash ${label} received`,
-          body: `${admin.name} confirmed receiving K${paid} in cash from ${payer}. The money is with them and ${payer}'s account has been credited.`,
+          title: arrival(updated).noun === "cash" ? `Cash ${label} received` : `${payer}'s ${arrival(updated).noun} confirmed`,
+          body:
+            arrival(updated).noun === "cash"
+              ? `${admin.name} confirmed receiving K${paid} in cash from ${payer}. The money is with them and ${payer}'s account has been credited.`
+              : `${admin.name} ${arrival(updated).confirm} of K${paid} from ${payer}. ${payer}'s account has been credited.`,
           groupId: updated.groupId,
           groupName: updated.groupName,
           transactionId: updated._id,
           sms: true,
-          smsText: `Chuma: ${admin.name} confirmed receiving K${paid} cash from ${payer} for ${updated.groupName}. The money is now with them.`,
+          smsText:
+            arrival(updated).noun === "cash"
+              ? `Chuma: ${admin.name} confirmed receiving K${paid} cash from ${payer} for ${updated.groupName}. The money is now with them.`
+              : `Chuma: ${admin.name} ${arrival(updated).confirm} of K${paid} from ${payer} for ${updated.groupName}.`,
         }
       );
     }
@@ -196,20 +251,26 @@ export async function resolveCashReceipt({ txn, admin, received }) {
   if (updated.memberId && String(updated.memberId) !== String(admin.userId)) {
     const label = labelFor(updated);
     const paid = Math.abs(updated.amount);
+    const a = arrival(updated);
+    const how = {
+      noun: a.noun,
+      title: a.noun === "cash" ? "Cash" : a.noun[0].toUpperCase() + a.noun.slice(1),
+      confirm: a.confirm,
+    };
     await notify({
       userId: updated.memberId,
       type: "contribution",
-      title: received ? `Cash ${label} confirmed` : `Cash ${label} declined`,
+      title: received ? `${how.title} ${label} confirmed` : `${how.title} ${label} declined`,
       body: received
-        ? `${admin.name} confirmed receiving your K${paid} cash ${label}. Your account has been updated.`
-        : `${admin.name} declined your K${paid} cash ${label}. The cash was not received. Please speak to your treasurer.`,
+        ? `${admin.name} ${how.confirm} for your K${paid} ${label}. Your account has been updated.`
+        : `${admin.name} declined your K${paid} ${how.noun} ${label}. It was not received. Please speak to your treasurer.`,
       groupId: updated.groupId,
       groupName: updated.groupName,
       transactionId: updated._id,
       sms: true,
       smsText: received
-        ? `Chuma: ${admin.name} confirmed your K${paid} cash ${label}. Your account is updated.`
-        : `Chuma: ${admin.name} declined your K${paid} cash ${label}. The cash was not received. Speak to your treasurer.`,
+        ? `Chuma: ${admin.name} confirmed your K${paid} ${how.noun} ${label}. Your account is updated.`
+        : `Chuma: ${admin.name} declined your K${paid} ${how.noun} ${label}. It was not received. Speak to your treasurer.`,
     });
   }
 
