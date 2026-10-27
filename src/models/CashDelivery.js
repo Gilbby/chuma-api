@@ -25,7 +25,10 @@ const cashDeliverySchema = new Schema(
 
     destination: {
       type: String,
-      enum: ["bank", "mobile-money", "project"],
+      // "other" is a free-text destination (destinationNote) the handler
+      // describes; "mobile-money" is kept for older records but no longer
+      // offered by the app.
+      enum: ["bank", "mobile-money", "project", "other"],
       required: true,
     },
 
@@ -39,6 +42,8 @@ const cashDeliverySchema = new Schema(
     // Deposit slip / transaction ID for a deposit; receipt number, if there
     // was one, for a payment.
     reference: { type: String, trim: true, maxlength: 60 },
+    // destination "other" only: free text saying where the cash went.
+    destinationNote: { type: String, trim: true, maxlength: 140 },
     // destination "project" only: who was paid.
     payee: { type: String, trim: true, maxlength: 80 },
 

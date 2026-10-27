@@ -35,7 +35,7 @@ import { notifyAll } from "./notify.service.js";
 
 export const GENERAL_GIVING_LABEL = "General giving";
 export const GIVING_CHANNELS = ["cash", "bank", "mobile-money"];
-const DESTINATIONS = ["bank", "mobile-money", "project"];
+const DESTINATIONS = ["bank", "project", "other"];
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 // Sums of 2dp amounts pick up float dust; anything smaller than this is zero.
@@ -118,6 +118,7 @@ export async function computeGroupFunds(group, { deliveryLimit = 20 } = {}) {
         cashOnHand: 0,
         banked: 0,
         mobileMoney: 0,
+        other: 0,
         paidOut: 0,
         paidFromGeneral: 0,
       });
@@ -141,6 +142,7 @@ export async function computeGroupFunds(group, { deliveryLimit = 20 } = {}) {
     p.cashOnHand -= d.amount;
     if (d.destination === "bank") p.banked += d.amount;
     else if (d.destination === "mobile-money") p.mobileMoney += d.amount;
+    else if (d.destination === "other") p.other += d.amount;
     else {
       // Paid out: money that has left the church.
       p.paidOut += d.amount;
@@ -156,6 +158,7 @@ export async function computeGroupFunds(group, { deliveryLimit = 20 } = {}) {
       cashOnHand: round2(p.cashOnHand),
       banked: round2(p.banked),
       mobileMoney: round2(p.mobileMoney),
+      other: round2(p.other),
       paidOut: round2(p.paidOut),
       paidFromGeneral: round2(p.paidFromGeneral),
     })),
@@ -222,7 +225,7 @@ export async function recordDelivery({ group, member, user, body }) {
   if (all && destination === "project")
     return {
       status: 400,
-      error: "Paying out everything at once goes to the bank or mobile money. Pay a project from its own row.",
+      error: "Paying out everything at once goes to the bank or elsewhere. Pay a project from its own row.",
     };
   const amount = all ? null : round2(body?.amount);
   if (!all && !(amount > 0)) return { status: 400, error: "Enter the amount" };
@@ -241,6 +244,15 @@ export async function recordDelivery({ group, member, user, body }) {
   let target = null;
   let payee;
   const reference = String(body?.reference ?? "").trim().slice(0, 60) || undefined;
+
+  // "other" has no account behind it, so the free text is the only record of
+  // where the cash went - it is required.
+  let destinationNote;
+  if (destination === "other") {
+    destinationNote = String(body?.destinationNote ?? "").trim().slice(0, 140);
+    if (destinationNote.length < 2)
+      return { status: 400, error: "Describe where the money went" };
+  }
 
   if (destination === "project") {
     if (source) {
@@ -298,6 +310,7 @@ export async function recordDelivery({ group, member, user, body }) {
         targetProjectId: target?._id ?? null,
         amount: l.amount,
         reference,
+        destinationNote,
         payee,
         batchId,
         recordedBy: user._id,
@@ -338,9 +351,11 @@ export async function recordDelivery({ group, member, user, body }) {
         ? "deposited it to the church bank account"
         : destination === "mobile-money"
           ? "deposited it to the church mobile money"
-          : target
-            ? `paid it out for ${target.name} (${payee})`
-            : `paid it out (${payee})`;
+          : destination === "other"
+            ? `moved it elsewhere (${destinationNote})`
+            : target
+              ? `paid it out for ${target.name} (${payee})`
+              : `paid it out (${payee})`;
     await notifyAll(
       chairs.map((m) => m.userId),
       {

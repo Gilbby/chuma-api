@@ -493,7 +493,9 @@ export async function buildStatement({ user, groupId, from, to, scope = "member"
           memberName: d.recordedByName ?? "",
           description: spent
             ? `Paid out${d.targetProjectId ? ` for ${nameOf(d.targetProjectId)}` : ""}${d.payee ? ` · ${d.payee}` : ""}`
-            : `Deposited to church ${d.destination === "bank" ? "bank account" : "mobile money"} · ${nameOf(d.sourceProjectId)}`,
+            : d.destination === "other"
+              ? `Other${d.destinationNote ? ` · ${d.destinationNote}` : ""} · ${nameOf(d.sourceProjectId)}`
+              : `Deposited to church ${d.destination === "bank" ? "bank account" : "mobile money"} · ${nameOf(d.sourceProjectId)}`,
           projectLabel: null,
           note: d.reference ?? "",
           amount,
