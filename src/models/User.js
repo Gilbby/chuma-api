@@ -55,6 +55,21 @@ const userSchema = new Schema(
       accountNumber: { type: String }, // wallet number or bank account
     },
 
+    // Chuma Plan (Google Play subscription via RevenueCat). Mirrors RevenueCat's
+    // view of the "group" entitlement - written only by billing.service.js
+    // from RevenueCat's own API, never from what the app reports.
+    plan: {
+      groupLimit: { type: Number, default: 0 }, // 0 = no active plan
+      basePlanId: { type: String }, // "groups-1" | "groups-3" | "groups-5"
+      productId: { type: String },
+      store: { type: String }, // "PLAY_STORE"
+      expiresAt: { type: Date },
+      willRenew: { type: Boolean },
+      // Set when the plan won't renew so reminders can say so.
+      unsubscribedAt: { type: Date },
+      syncedAt: { type: Date },
+    },
+
     // Trust score is computed, but we cache the last value
     trustScore: { type: Number, default: 70 },
   },

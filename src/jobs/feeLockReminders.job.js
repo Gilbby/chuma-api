@@ -11,6 +11,12 @@
 import { Group } from "../models/Group.js";
 import { getGraceInfo, getAmountOwed } from "../services/logic.service.js";
 import { notifyAll } from "../services/notify.service.js";
+import { User } from "../models/User.js";
+import config from "../config/index.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Play billing: nudge on these days before a free window / plan runs out.
+const WARN_ON_DAYS_LEFT = [7, 3, 1];
 
 function isSameCalendarDay(a, b) {
   return (
@@ -18,6 +24,69 @@ function isSameCalendarDay(a, b) {
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
   );
+}
+
+/**
+ * Who hears about a group's Chuma Plan: its founder (the only person who can
+ * pay for it) plus the active Chairperson and Treasurer.
+ */
+function planRecipients(group) {
+  const ids = new Set();
+  if (group.governance?.chairpersonUserId)
+    ids.add(String(group.governance.chairpersonUserId));
+  for (const m of group.members || []) {
+    if (
+      (m.role === "Chairperson" || m.role === "Treasurer") &&
+      m.status === "active" &&
+      m.userId
+    )
+      ids.add(String(m.userId));
+  }
+  return [...ids];
+}
+
+/**
+ * Pre-deadline nudge (Play billing). Sent 7, 3 and 1 day(s) before a group's
+ * cover ends - but only when it will actually end: a group covered by a plan
+ * that auto-renews is left alone. Returns true if a warning went out.
+ */
+async function sendPlanWarning(group, now) {
+  if (!group.feePaidThrough) return false;
+  const until = new Date(group.feePaidThrough);
+  const daysLeft = Math.ceil((until.getTime() - now.getTime()) / DAY_MS);
+  if (!WARN_ON_DAYS_LEFT.includes(daysLeft)) return false;
+  if (daysLeft > config.billing.warnDaysBefore) return false;
+
+  const last = group.billing?.lastWarningSentAt;
+  if (last && isSameCalendarDay(new Date(last), now)) return false;
+
+  if (group.billing?.coveredByPlan) {
+    const founder = await User.findById(group.governance?.chairpersonUserId)
+      .select("plan")
+      .lean();
+    if (founder?.plan?.willRenew) return false; // renews by itself
+  }
+
+  const legacy = !group.billing?.coveredByPlan;
+  const body = legacy
+    ? `${group.name}'s free period ends in ${daysLeft} day(s). The group's founder needs a Chuma Plan in the app to keep it open.`
+    : `The Chuma Plan covering ${group.name} ends in ${daysLeft} day(s) and won't renew. Renew it in the app to keep the group open.`;
+
+  await notifyAll(planRecipients(group), {
+    type: "fee",
+    title: legacy ? "Free period ending" : "Plan ending",
+    body,
+    groupId: group._id,
+    groupName: group.name,
+    // SMS only on the last warning - the earlier ones are in-app.
+    sms: daysLeft === 1,
+    smsText: `Chuma: ${body}`,
+  });
+  await Group.updateOne(
+    { _id: group._id },
+    { $set: { "billing.lastWarningSentAt": new Date() } }
+  );
+  return true;
 }
 
 export async function runFeeLockReminders() {
@@ -30,10 +99,19 @@ export async function runFeeLockReminders() {
   });
 
   const now = new Date();
+  const play = config.billing.playBillingEnabled;
   let remindedCount = 0;
 
   for (const group of groups) {
     const grace = getGraceInfo(group);
+
+    // Play billing: before anything is overdue, warn the founder that the
+    // group's free window (or a plan that won't renew) is about to end.
+    if (play && grace.status === "paid") {
+      if (await sendPlanWarning(group, now)) remindedCount++;
+      continue;
+    }
+
     // Only groups mid-grace need a countdown. "paid" is fine; "locked" already
     // shows the lock overlay in-app, so no more reminders.
     if (grace.status !== "grace") continue;
@@ -44,6 +122,26 @@ export async function runFeeLockReminders() {
       isSameCalendarDay(new Date(group.lastFeeReminderSentAt), now)
     )
       continue;
+
+    // Play billing: no kwacha amount - the founder renews or upgrades their
+    // Chuma Plan in the app (Google Play), so say that instead.
+    if (play) {
+      await notifyAll(planRecipients(group), {
+        type: "fee",
+        title: "Group about to lock",
+        body: `${group.name} is no longer covered by a Chuma Plan. ${grace.daysLeft} day(s) left before the group is locked. The group's founder can choose or renew a plan in the app.`,
+        groupId: group._id,
+        groupName: group.name,
+        sms: true,
+        smsText: `Chuma: ${group.name} locks in ${grace.daysLeft} day(s). The group's founder can choose or renew a Chuma Plan in the app.`,
+      });
+      await Group.updateOne(
+        { _id: group._id },
+        { $set: { lastFeeReminderSentAt: new Date() } }
+      );
+      remindedCount++;
+      continue;
+    }
 
     const recipients = group.members.filter(
       (m) =>

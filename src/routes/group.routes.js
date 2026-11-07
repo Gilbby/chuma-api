@@ -48,6 +48,7 @@ import {
   announceGroupActivated,
 } from "../services/settlement.service.js";
 import config from "../config/index.js";
+import { recomputeCoverage } from "../services/billing.service.js";
 
 const router = express.Router();
 
@@ -94,6 +95,16 @@ function withFeeStatus(group) {
       monthsOwed: getMonthsOwed(g),
       amountOwed: getAmountOwed(g),
       locked: isGroupLocked(g),
+      // How this group is paid for, so the app knows which screen to offer:
+      // "play" -> Chuma Plan (Play subscription), "pawapay" -> fee screen,
+      // "off" -> free tracker build (never locked).
+      billing: config.billing.playBillingEnabled
+        ? "play"
+        : config.rules.groupFeesEnabled
+          ? "pawapay"
+          : "off",
+      coveredByPlan: !!g.billing?.coveredByPlan,
+      freeUntil: g.billing?.legacyFreeUntil || null,
     },
   };
 }
@@ -637,7 +648,12 @@ router.post(
       // Fee fields only when the group fee is enabled. When it's off (tracker
       // build) the group is created live with no fee, so none of these are set
       // and getGraceInfo()/isGroupLocked() treat it as "paid" (never locked).
-      ...(config.rules.groupFeesEnabled
+      // Play billing: every new group starts "pending-payment" and
+      // recomputeCoverage (below) starts it at once if the founder's plan has
+      // a free slot - otherwise it waits for a plan upgrade.
+      ...(config.billing.playBillingEnabled
+        ? { monthlyFee: fee, feeDueDay, status: "pending-payment" }
+        : config.rules.groupFeesEnabled
         ? {
             monthlyFee: fee,
             feeDueDay,
@@ -672,6 +688,19 @@ router.post(
       ],
     });
     await group.validate(); // ValidationError → 400 via the error middleware
+
+    // Play billing: no charge here - the subscription is bought in the app
+    // through Google Play. Coverage decides whether the group starts now
+    // (and sends its co-admin invites) or waits for a bigger plan.
+    if (config.billing.playBillingEnabled) {
+      await group.save();
+      await recomputeCoverage(req.userId);
+      const saved = await Group.findById(group._id);
+      return res.status(201).json({
+        group: withFeeStatus(saved),
+        needsPlan: saved.status === "pending-payment",
+      });
+    }
 
     // Fees disabled (tracker build): no PawaPay charge. The group is already
     // "active", so save it and send the co-admin invites the fee flow would
@@ -1742,6 +1771,8 @@ router.post(
 
     if (voters.length === 0) {
       await Group.updateOne({ _id: group._id }, { $set: { status: "closed" } });
+      // A closed group frees its slot on the founder's Chuma Plan.
+      await recomputeCoverage(group.governance?.chairpersonUserId);
       // Ordinary members can still be here with no second admin - they are not
       // asked, but they are told.
       if (others.length)

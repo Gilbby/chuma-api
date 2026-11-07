@@ -300,6 +300,30 @@ export const config = {
     country: process.env.COUNTRY || "ZMB",
   },
 
+  // Google Play Billing via RevenueCat: a chairperson's tiered "Chuma Plan"
+  // subscription covers their oldest N groups (see billing.service.js). This is
+  // separate from rules.groupFeesEnabled, which is the pawaPay fee for the
+  // organization-account build - turn on one or the other, not both.
+  billing: {
+    // OFF until the paid Android build ships: with it off, groups are free and
+    // never locked, exactly as before.
+    playBillingEnabled: bool(process.env.PLAY_BILLING_ENABLED, false),
+    // The deadline existing groups get to subscribe by. It's stamped onto them
+    // by `npm run billing:legacy-deadline` (scripts/startLegacyDeadline.js).
+    legacyGraceDays: num(process.env.BILLING_LEGACY_GRACE_DAYS, 30),
+    // How many days before a free window ends to start warning (in-app + SMS).
+    warnDaysBefore: num(process.env.BILLING_WARN_DAYS_BEFORE, 7),
+    // RevenueCat entitlement that unlocks groups, and the plan -> group cap map.
+    // Keys match the Play base plan ID inside the "chuma_plan" subscription.
+    entitlement: process.env.REVENUECAT_ENTITLEMENT || "group",
+    tiers: { "groups-1": 1, "groups-3": 3, "groups-5": 5 },
+    // Secret (sk_...) v1 API key - lets the API ask RevenueCat for the real
+    // subscription state instead of trusting the app or a webhook body.
+    revenuecatSecretKey: process.env.REVENUECAT_SECRET_API_KEY || "",
+    // Shared secret RevenueCat sends as the webhook's Authorization header.
+    revenuecatWebhookAuth: process.env.REVENUECAT_WEBHOOK_AUTH || "",
+  },
+
   corsOrigins: (process.env.CORS_ORIGINS || "*")
     .split(",")
     .map((s) => s.trim()),

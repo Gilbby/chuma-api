@@ -24,6 +24,7 @@ import {
   settleCompletedTransaction,
   handleFailedTransaction,
 } from "../services/settlement.service.js";
+import { recomputeCoverage } from "../services/billing.service.js";
 
 const router = express.Router();
 
@@ -543,6 +544,8 @@ async function executeApproval(approval, req) {
       { status: "closed" },
       { new: true }
     );
+    // A closed group frees its slot on the founder's Chuma Plan.
+    await recomputeCoverage(group?.governance?.chairpersonUserId);
     const closedMembers = (group?.members || []).filter(
       (m) => m.status === "active" && m.userId
     );

@@ -251,7 +251,9 @@ export function getGraceInfo(group) {
   // Fees disabled (tracker build): every group reads as fully paid, so nothing
   // is ever locked or awaiting payment - this also unlocks any legacy group
   // still stored as "pending-payment" from before the fee was removed.
-  if (!config.rules.groupFeesEnabled) {
+  // Play billing (billing.service.js) reuses this same machinery: there,
+  // feePaidThrough means "covered by a plan / free window until".
+  if (!config.rules.groupFeesEnabled && !config.billing.playBillingEnabled) {
     return { status: "paid", daysIntoGrace: 0, daysLeft: GRACE_PERIOD_DAYS };
   }
   // Nothing has ever been paid, so this is not a grace window - it is a group
