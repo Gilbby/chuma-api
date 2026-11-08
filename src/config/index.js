@@ -295,7 +295,9 @@ export const config = {
     graceDays: num(process.env.GROUP_FEE_GRACE_DAYS, 5),
     // A founder pays a monthly fee per group, so the cap is anti-abuse, not
     // a product limit - it stops one account spinning up endless groups.
-    maxGroupsFounded: num(process.env.MAX_GROUPS_FOUNDED, 5),
+    // 0 = no limit (the default): a Chuma Plan lets its holder found as many
+    // groups as they like. Set MAX_GROUPS_FOUNDED to cap it if abuse shows up.
+    maxGroupsFounded: num(process.env.MAX_GROUPS_FOUNDED, 0),
     currency: process.env.CURRENCY || "ZMW",
     country: process.env.COUNTRY || "ZMB",
   },
@@ -319,7 +321,7 @@ export const config = {
     // groups (defaults to the per-person cap, rules.maxGroupsFounded). Tiers
     // were dropped - Play refused in-app switches between base plans of the
     // same subscription ("replacement mode not supported").
-    planGroupLimit: num(process.env.BILLING_PLAN_GROUP_LIMIT, 0), // 0 = maxGroupsFounded
+    planGroupLimit: num(process.env.BILLING_PLAN_GROUP_LIMIT, 0), // 0 = no limit (or maxGroupsFounded if set)
     // The Play base plan (inside "chuma_plan") the app sells. groups-1 is
     // already priced at US$2.99. groups-3 / groups-5 are no longer offered,
     // but anyone still subscribed to them gets the same full plan.

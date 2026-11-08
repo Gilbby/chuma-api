@@ -533,7 +533,7 @@ router.post(
       "governance.chairpersonUserId": req.userId,
       status: { $ne: "closed" },
     });
-    if (founded >= config.rules.maxGroupsFounded)
+    if (config.rules.maxGroupsFounded > 0 && founded >= config.rules.maxGroupsFounded)
       return res.status(403).json({
         error: `You already run ${founded} groups. Close one before creating another.`,
       });

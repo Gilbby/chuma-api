@@ -46,11 +46,22 @@ export function coverageOrder(groups) {
   });
 }
 
+/**
+ * "No limit", as a plain number. JSON can't carry Infinity, and older app
+ * builds compare these numbers (groupsFounded >= maxGroupsFounded), so a big
+ * sentinel keeps them working; the app shows it as "Unlimited groups".
+ */
+export const UNLIMITED_GROUPS = 9999;
+
+function capOrUnlimited(n) {
+  return n > 0 ? n : UNLIMITED_GROUPS;
+}
+
 /** How many groups one Chuma Plan covers (single plan, no tiers). */
 export function planGroupLimit() {
   return config.billing.planGroupLimit > 0
     ? config.billing.planGroupLimit
-    : config.rules.maxGroupsFounded;
+    : capOrUnlimited(config.rules.maxGroupsFounded);
 }
 
 /**
@@ -291,6 +302,6 @@ export async function planSummary(userId) {
     tiers: { [config.billing.sellBasePlan]: planGroupLimit() },
     // Kwacha per 1 USD for the app's "about K…" estimate; null = don't show one.
     usdToZmwRate: config.billing.usdToZmwRate > 0 ? config.billing.usdToZmwRate : null,
-    maxGroupsFounded: config.rules.maxGroupsFounded,
+    maxGroupsFounded: capOrUnlimited(config.rules.maxGroupsFounded),
   };
 }
