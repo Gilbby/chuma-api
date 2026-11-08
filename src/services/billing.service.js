@@ -233,6 +233,8 @@ export async function planSummary(userId) {
       coveredUntil: g.feePaidThrough || null,
     })),
     tiers: config.billing.tiers,
+    // Kwacha per 1 USD for the app's "about K…" estimate; null = don't show one.
+    usdToZmwRate: config.billing.usdToZmwRate > 0 ? config.billing.usdToZmwRate : null,
     maxGroupsFounded: config.rules.maxGroupsFounded,
   };
 }

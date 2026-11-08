@@ -317,6 +317,10 @@ export const config = {
     // Keys match the Play base plan ID inside the "chuma_plan" subscription.
     entitlement: process.env.REVENUECAT_ENTITLEMENT || "group",
     tiers: { "groups-1": 1, "groups-3": 3, "groups-5": 5 },
+    // Play bills Zambia in USD (it has no ZMW). The app shows "about K…" under
+    // Play's real price using this rate - kwacha per 1 USD, set by hand from a
+    // bank's rate. 0/unset = show no kwacha estimate rather than a stale one.
+    usdToZmwRate: num(process.env.BILLING_USD_ZMW_RATE, 0),
     // Secret (sk_...) v1 API key - lets the API ask RevenueCat for the real
     // subscription state instead of trusting the app or a webhook body.
     revenuecatSecretKey: process.env.REVENUECAT_SECRET_API_KEY || "",
