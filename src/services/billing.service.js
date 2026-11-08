@@ -29,6 +29,23 @@ export function playBillingEnabled() {
   return config.billing.playBillingEnabled;
 }
 
+/**
+ * The order a founder's plan covers their groups in: groups they picked
+ * (billing.preferredAt, most recent first), then the rest oldest first.
+ */
+export function coverageOrder(groups) {
+  const t = (d) => (d ? new Date(d).getTime() : 0);
+  return [...groups].sort((a, b) => {
+    const pa = t(a.billing?.preferredAt);
+    const pb = t(b.billing?.preferredAt);
+    if (pa !== pb) return pb - pa; // picked groups first, latest pick first
+    const ca = t(a.createdAt);
+    const cb = t(b.createdAt);
+    if (ca !== cb) return ca - cb; // then oldest first
+    return String(a._id).localeCompare(String(b._id));
+  });
+}
+
 /** Group cap for a Play base plan id ("groups-3" -> 3). Unknown -> 0. */
 export function groupLimitFor(basePlanId) {
   return config.billing.tiers[basePlanId] ?? 0;
@@ -152,12 +169,12 @@ export async function recomputeCoverage(userId) {
   const plan = user?.plan;
   const limit = isPlanActive(plan, now) ? plan.groupLimit : 0;
 
-  const groups = await Group.find({
-    "governance.chairpersonUserId": userId,
-    status: { $ne: "closed" },
-  })
-    .sort({ createdAt: 1, _id: 1 })
-    .select("status feePaidThrough monthlyFee billing createdAt");
+  const groups = coverageOrder(
+    await Group.find({
+      "governance.chairpersonUserId": userId,
+      status: { $ne: "closed" },
+    }).select("status feePaidThrough monthlyFee billing createdAt")
+  );
 
   let used = 0;
   for (const g of groups) {
@@ -200,17 +217,38 @@ export async function recomputeCoverage(userId) {
   }
 }
 
+/**
+ * Founder chooses this group to be covered first. If the plan is full, the
+ * group that was last in line loses cover (and gets the normal grace period).
+ * Returns false if it isn't one of their open groups.
+ */
+export async function preferGroup(userId, groupId) {
+  if (!mongoose.isValidObjectId(groupId)) return false;
+  const res = await Group.updateOne(
+    {
+      _id: groupId,
+      "governance.chairpersonUserId": userId,
+      status: { $ne: "closed" },
+    },
+    { $set: { "billing.preferredAt": new Date() } }
+  );
+  if (!res.matchedCount) return false;
+  await recomputeCoverage(userId);
+  return true;
+}
+
 /** What the app needs to render the plan screen. */
 export async function planSummary(userId) {
   const enabled = playBillingEnabled();
   const user = await User.findById(userId).select("plan").lean();
-  const groups = await Group.find({
-    "governance.chairpersonUserId": userId,
-    status: { $ne: "closed" },
-  })
-    .sort({ createdAt: 1, _id: 1 })
-    .select("name status billing feePaidThrough")
-    .lean();
+  const groups = coverageOrder(
+    await Group.find({
+      "governance.chairpersonUserId": userId,
+      status: { $ne: "closed" },
+    })
+      .select("name status billing feePaidThrough createdAt")
+      .lean()
+  );
 
   const plan = user?.plan || { groupLimit: 0 };
   return {

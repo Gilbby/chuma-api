@@ -236,6 +236,10 @@ const groupSchema = new Schema(
       // True when the founder's current plan covers this group.
       coveredByPlan: { type: Boolean, default: false },
       lastWarningSentAt: { type: Date }, // pre-deadline "subscribe soon" nudge
+      // The founder picked this group to be covered first ("move my plan
+      // here", or bought a plan from this group's screen). Most recent pick
+      // wins; groups never picked follow, oldest first.
+      preferredAt: { type: Date },
     },
 
     // Health analytics (cached; recomputed)
