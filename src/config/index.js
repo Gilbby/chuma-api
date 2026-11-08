@@ -326,6 +326,12 @@ export const config = {
     // already priced at US$2.99. groups-3 / groups-5 are no longer offered,
     // but anyone still subscribed to them gets the same full plan.
     sellBasePlan: process.env.BILLING_SELL_BASE_PLAN || "groups-1",
+    // Extra days Chuma keeps a group open after its subscription (or free
+    // window) ends. 0 = lock as soon as it ends. Google Play already runs its
+    // own grace period for failed payments (7 days on chuma_plan), during
+    // which the subscription - and so the group - stays active. Separate from
+    // rules.graceDays, which is the pawaPay monthly fee's grace.
+    graceDays: num(process.env.BILLING_GRACE_DAYS, 0),
     // Play bills Zambia in USD (it has no ZMW). The app shows "about K…" under
     // Play's real price using this rate - kwacha per 1 USD, set by hand from a
     // bank's rate. 0/unset = show no kwacha estimate rather than a stale one.

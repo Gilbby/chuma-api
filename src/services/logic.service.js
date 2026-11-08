@@ -271,6 +271,21 @@ export function getGraceInfo(group) {
     return { status: "paid", daysIntoGrace: 0, daysLeft: GRACE_PERIOD_DAYS };
   }
   const msPerDay = 1000 * 60 * 60 * 24;
+  // Play billing (Chuma Plan): the group locks the moment its subscription or
+  // free window ends, plus billing.graceDays (0 by default) - Google Play
+  // already carries failed payments through its own grace period.
+  if (config.billing.playBillingEnabled) {
+    const graceMs = config.billing.graceDays * msPerDay;
+    const overdueMs = now.getTime() - paidThrough.getTime();
+    if (overdueMs <= graceMs) {
+      return {
+        status: "grace",
+        daysIntoGrace: Math.floor(overdueMs / msPerDay),
+        daysLeft: Math.max(0, Math.ceil((graceMs - overdueMs) / msPerDay)),
+      };
+    }
+    return { status: "locked", daysIntoGrace: config.billing.graceDays, daysLeft: 0 };
+  }
   const daysOverdue = Math.floor((now.getTime() - paidThrough.getTime()) / msPerDay);
   if (daysOverdue <= GRACE_PERIOD_DAYS) {
     return {
