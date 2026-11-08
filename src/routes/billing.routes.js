@@ -42,7 +42,7 @@ router.post(
     } catch (e) {
       return res
         .status(e.status || 502)
-        .json({ error: "Couldn't confirm your plan with Google Play yet. Try again in a moment." });
+        .json({ error: "Couldn't confirm your subscription with Google Play yet. Try again in a moment." });
     }
     res.json(await planSummary(req.userId));
   })

@@ -69,8 +69,8 @@ async function sendPlanWarning(group, now) {
 
   const legacy = !group.billing?.coveredByPlan;
   const body = legacy
-    ? `${group.name}'s free period ends in ${daysLeft} day(s). The group's founder needs a Chuma Plan in the app to keep it open.`
-    : `The Chuma Plan covering ${group.name} ends in ${daysLeft} day(s) and won't renew. Renew it in the app to keep the group open.`;
+    ? `${group.name}'s free period ends in ${daysLeft} day(s). The group's founder needs to subscribe to the Chuma Plan in the app to keep it open.`
+    : `The Chuma Plan subscription for ${group.name} ends in ${daysLeft} day(s) and won't renew. Renew it in the app to keep the group open.`;
 
   await notifyAll(planRecipients(group), {
     type: "fee",
@@ -129,11 +129,11 @@ export async function runFeeLockReminders() {
       await notifyAll(planRecipients(group), {
         type: "fee",
         title: "Group about to lock",
-        body: `${group.name} is no longer covered by a Chuma Plan. ${grace.daysLeft} day(s) left before the group is locked. The group's founder can choose or renew a plan in the app.`,
+        body: `${group.name} no longer has an active Chuma Plan subscription. ${grace.daysLeft} day(s) left before the group is locked. The group's founder can renew the subscription in the app.`,
         groupId: group._id,
         groupName: group.name,
         sms: true,
-        smsText: `Chuma: ${group.name} locks in ${grace.daysLeft} day(s). The group's founder can choose or renew a Chuma Plan in the app.`,
+        smsText: `Chuma: ${group.name} locks in ${grace.daysLeft} day(s). The group's founder can renew the Chuma Plan subscription in the app.`,
       });
       await Group.updateOne(
         { _id: group._id },
