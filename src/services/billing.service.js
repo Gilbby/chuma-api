@@ -46,9 +46,20 @@ export function coverageOrder(groups) {
   });
 }
 
-/** Group cap for a Play base plan id ("groups-3" -> 3). Unknown -> 0. */
+/** How many groups one Chuma Plan covers (single plan, no tiers). */
+export function planGroupLimit() {
+  return config.billing.planGroupLimit > 0
+    ? config.billing.planGroupLimit
+    : config.rules.maxGroupsFounded;
+}
+
+/**
+ * Group cap for whatever "chuma_plan" base plan someone holds. There's one
+ * plan now, so any of them (including the retired groups-3 / groups-5)
+ * covers the full limit. No base plan -> 0.
+ */
 export function groupLimitFor(basePlanId) {
-  return config.billing.tiers[basePlanId] ?? 0;
+  return basePlanId ? planGroupLimit() : 0;
 }
 
 function latest(...dates) {
@@ -275,7 +286,9 @@ export async function planSummary(userId) {
       freeUntil: g.billing?.legacyFreeUntil || null,
       coveredUntil: g.feePaidThrough || null,
     })),
-    tiers: config.billing.tiers,
+    // What the app may sell: just the one plan. Older builds read this map to
+    // decide which Play packages to show, so they show only this one too.
+    tiers: { [config.billing.sellBasePlan]: planGroupLimit() },
     // Kwacha per 1 USD for the app's "about K…" estimate; null = don't show one.
     usdToZmwRate: config.billing.usdToZmwRate > 0 ? config.billing.usdToZmwRate : null,
     maxGroupsFounded: config.rules.maxGroupsFounded,

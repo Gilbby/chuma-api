@@ -313,10 +313,17 @@ export const config = {
     legacyGraceDays: num(process.env.BILLING_LEGACY_GRACE_DAYS, 30),
     // How many days before a free window ends to start warning (in-app + SMS).
     warnDaysBefore: num(process.env.BILLING_WARN_DAYS_BEFORE, 7),
-    // RevenueCat entitlement that unlocks groups, and the plan -> group cap map.
-    // Keys match the Play base plan ID inside the "chuma_plan" subscription.
+    // RevenueCat entitlement that unlocks groups.
     entitlement: process.env.REVENUECAT_ENTITLEMENT || "group",
-    tiers: { "groups-1": 1, "groups-3": 3, "groups-5": 5 },
+    // ONE plan: an active subscription lets its holder run up to this many
+    // groups (defaults to the per-person cap, rules.maxGroupsFounded). Tiers
+    // were dropped - Play refused in-app switches between base plans of the
+    // same subscription ("replacement mode not supported").
+    planGroupLimit: num(process.env.BILLING_PLAN_GROUP_LIMIT, 0), // 0 = maxGroupsFounded
+    // The Play base plan (inside "chuma_plan") the app sells. groups-1 is
+    // already priced at US$2.99. groups-3 / groups-5 are no longer offered,
+    // but anyone still subscribed to them gets the same full plan.
+    sellBasePlan: process.env.BILLING_SELL_BASE_PLAN || "groups-1",
     // Play bills Zambia in USD (it has no ZMW). The app shows "about K…" under
     // Play's real price using this rate - kwacha per 1 USD, set by hand from a
     // bank's rate. 0/unset = show no kwacha estimate rather than a stale one.
