@@ -162,11 +162,17 @@ router.post(
         // ever moves it off that - leave it and the group is neither deleted
         // nor usable. Matched on the parked status so this cannot overwrite a
         // state something else set while the vote ran.
-        if (claimed.type === "group-deletion" && claimed.groupId)
+        if (claimed.type === "group-deletion" && claimed.groupId) {
           await Group.updateOne(
             { _id: claimed.groupId, status: "deletion-pending" },
             { $set: { status: "active" } }
           );
+          // Back in use, so it needs a place on its founder's plan again.
+          const back = await Group.findById(claimed.groupId)
+            .select("governance.chairpersonUserId")
+            .lean();
+          await recomputeCoverage(back?.governance?.chairpersonUserId);
+        }
         // Rejecting a cash receipt means the money never arrived: fail the
         // transaction and tell the member, exactly as declining from the
         // notification does.

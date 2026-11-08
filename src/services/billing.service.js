@@ -178,6 +178,11 @@ export async function recomputeCoverage(userId) {
 
   let used = 0;
   for (const g of groups) {
+    // A group its admins are voting to delete doesn't hold a slot - the
+    // founder asked for it gone, so the plan moves on to their next group.
+    // Left untouched; if the vote fails it's back to "active" and the
+    // approval route recomputes, so it competes for a slot again.
+    if (g.status === "deletion-pending") continue;
     const covered = used < limit;
     if (covered) used++;
 
@@ -248,7 +253,7 @@ export async function planSummary(userId) {
     })
       .select("name status billing feePaidThrough createdAt")
       .lean()
-  );
+  ).filter((g) => g.status !== "deletion-pending"); // being deleted: holds no slot
 
   const plan = user?.plan || { groupLimit: 0 };
   return {

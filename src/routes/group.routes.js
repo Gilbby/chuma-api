@@ -1818,6 +1818,8 @@ router.post(
       { _id: group._id },
       { $set: { status: "deletion-pending" } }
     );
+    // While the vote runs, the group doesn't use a slot on the founder's plan.
+    await recomputeCoverage(group.governance?.chairpersonUserId);
 
     await notifyAll(
       voters.map((v) => v.userId),
