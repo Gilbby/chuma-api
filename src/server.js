@@ -32,6 +32,7 @@ import shareoutRoutes from "./routes/shareout.routes.js";
 import chilimbaRoutes from "./routes/chilimba.routes.js";
 import miscRoutes from "./routes/misc.routes.js";
 import webhookRoutes from "./routes/webhook.routes.js";
+import billingRoutes from "./routes/billing.routes.js";
 
 const app = express();
 
@@ -110,6 +111,7 @@ app.use("/api/shareout", shareoutRoutes);
 app.use("/api/chilimba", chilimbaRoutes); // rotating-savings draw + round payouts
 app.use("/api", miscRoutes); // penalties, notifications, transactions, reports
 app.use("/api/webhooks", webhookRoutes);
+app.use("/api/billing", billingRoutes); // Chuma Plan (Google Play subscription)
 
 // Public legal pages (Privacy Policy, Terms, and the account-deletion page the
 // app stores require). Served as plain HTML from ../public with the `.html`
@@ -128,7 +130,7 @@ async function start() {
   // Daily at 08:00 server time: remind chairperson/treasurer of groups in the
   // fee grace period, counting down days left before lock. Only runs when the
   // group fee is enabled (org-account build) - the tracker build has no fee.
-  if (config.rules.groupFeesEnabled) {
+  if (config.rules.groupFeesEnabled || config.billing.playBillingEnabled) {
     cron.schedule("0 8 * * *", runFeeLockReminders);
     console.log("   Cron: fee-lock reminders scheduled (daily 08:00)");
   }

@@ -18,6 +18,8 @@ import {
   retrieveDecision as retrieveDiditDecision,
 } from "../services/didit.service.js";
 import config from "../config/index.js";
+import { hashValue, safeEqualHex } from "../utils/helpers.js";
+import { syncUserPlan } from "../services/billing.service.js";
 
 const router = express.Router();
 
@@ -182,6 +184,49 @@ router.post(
     }
 
     console.log(`[WEBHOOK] didit ${sessionId} → ${status}`);
+    res.status(200).json({ received: true });
+  })
+);
+
+/**
+ * RevenueCat sends subscription events (purchase, renewal, plan change,
+ * cancellation, billing issue, expiration, transfer...) here.
+ *
+ * Configure in RevenueCat -> Project -> Integrations -> Webhooks:
+ *   URL:                  <PUBLIC_BASE_URL>/api/webhooks/revenuecat
+ *   Authorization header: the exact value of REVENUECAT_WEBHOOK_AUTH
+ *
+ * The body is only used to learn WHICH users changed. Their plan is then
+ * re-read from RevenueCat's API (syncUserPlan), so a forged or out-of-order
+ * event can't grant a plan. Non-200 makes RevenueCat retry, which is what we
+ * want if that lookup fails.
+ */
+router.post(
+  "/revenuecat",
+  asyncHandler(async (req, res) => {
+    const expected = config.billing.revenuecatWebhookAuth;
+    const got = req.headers.authorization || "";
+    if (!expected || !safeEqualHex(hashValue(got), hashValue(expected))) {
+      console.warn("[WEBHOOK] rejected revenuecat event: bad authorization");
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    const event = req.body?.event || {};
+    if (event.type === "TEST") return res.status(200).json({ received: true });
+
+    // A TRANSFER moves a purchase between app users (e.g. a restore on a
+    // different Chuma account), so both sides need re-syncing.
+    const userIds = new Set(
+      [
+        event.app_user_id,
+        event.original_app_user_id,
+        ...(event.transferred_from || []),
+        ...(event.transferred_to || []),
+      ].filter(Boolean)
+    );
+
+    for (const userId of userIds) await syncUserPlan(userId);
+    console.log(`[WEBHOOK] revenuecat ${event.type} → synced ${[...userIds].join(", ")}`);
     res.status(200).json({ received: true });
   })
 );

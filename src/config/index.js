@@ -295,9 +295,52 @@ export const config = {
     graceDays: num(process.env.GROUP_FEE_GRACE_DAYS, 5),
     // A founder pays a monthly fee per group, so the cap is anti-abuse, not
     // a product limit - it stops one account spinning up endless groups.
-    maxGroupsFounded: num(process.env.MAX_GROUPS_FOUNDED, 5),
+    // 0 = no limit (the default): a Chuma Plan lets its holder found as many
+    // groups as they like. Set MAX_GROUPS_FOUNDED to cap it if abuse shows up.
+    maxGroupsFounded: num(process.env.MAX_GROUPS_FOUNDED, 0),
     currency: process.env.CURRENCY || "ZMW",
     country: process.env.COUNTRY || "ZMB",
+  },
+
+  // Google Play Billing via RevenueCat: a chairperson's tiered "Chuma Plan"
+  // subscription covers their oldest N groups (see billing.service.js). This is
+  // separate from rules.groupFeesEnabled, which is the pawaPay fee for the
+  // organization-account build - turn on one or the other, not both.
+  billing: {
+    // OFF until the paid Android build ships: with it off, groups are free and
+    // never locked, exactly as before.
+    playBillingEnabled: bool(process.env.PLAY_BILLING_ENABLED, false),
+    // The deadline existing groups get to subscribe by. It's stamped onto them
+    // by `npm run billing:legacy-deadline` (scripts/startLegacyDeadline.js).
+    legacyGraceDays: num(process.env.BILLING_LEGACY_GRACE_DAYS, 30),
+    // How many days before a free window ends to start warning (in-app + SMS).
+    warnDaysBefore: num(process.env.BILLING_WARN_DAYS_BEFORE, 7),
+    // RevenueCat entitlement that unlocks groups.
+    entitlement: process.env.REVENUECAT_ENTITLEMENT || "group",
+    // ONE plan: an active subscription lets its holder run up to this many
+    // groups (defaults to the per-person cap, rules.maxGroupsFounded). Tiers
+    // were dropped - Play refused in-app switches between base plans of the
+    // same subscription ("replacement mode not supported").
+    planGroupLimit: num(process.env.BILLING_PLAN_GROUP_LIMIT, 0), // 0 = no limit (or maxGroupsFounded if set)
+    // The Play base plan (inside "chuma_plan") the app sells. groups-1 is
+    // already priced at US$2.99. groups-3 / groups-5 are no longer offered,
+    // but anyone still subscribed to them gets the same full plan.
+    sellBasePlan: process.env.BILLING_SELL_BASE_PLAN || "groups-1",
+    // Extra days Chuma keeps a group open after its subscription (or free
+    // window) ends. 0 = lock as soon as it ends. Google Play already runs its
+    // own grace period for failed payments (7 days on chuma_plan), during
+    // which the subscription - and so the group - stays active. Separate from
+    // rules.graceDays, which is the pawaPay monthly fee's grace.
+    graceDays: num(process.env.BILLING_GRACE_DAYS, 0),
+    // Play bills Zambia in USD (it has no ZMW). The app shows "about K…" under
+    // Play's real price using this rate - kwacha per 1 USD, set by hand from a
+    // bank's rate. 0/unset = show no kwacha estimate rather than a stale one.
+    usdToZmwRate: num(process.env.BILLING_USD_ZMW_RATE, 0),
+    // Secret (sk_...) v1 API key - lets the API ask RevenueCat for the real
+    // subscription state instead of trusting the app or a webhook body.
+    revenuecatSecretKey: process.env.REVENUECAT_SECRET_API_KEY || "",
+    // Shared secret RevenueCat sends as the webhook's Authorization header.
+    revenuecatWebhookAuth: process.env.REVENUECAT_WEBHOOK_AUTH || "",
   },
 
   corsOrigins: (process.env.CORS_ORIGINS || "*")

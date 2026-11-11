@@ -226,6 +226,22 @@ const groupSchema = new Schema(
     feePaidThrough: { type: Date }, // paid up to this date
     lastFeeReminderSentAt: { type: Date }, // last day a grace reminder was sent
 
+    // Play Billing coverage (billing.service.js recomputeCoverage). With Play
+    // billing on, feePaidThrough above means "covered until": the founder's
+    // plan expiry for covered groups, legacyFreeUntil for pre-billing groups.
+    billing: {
+      // Groups that existed before billing launched are free until this date
+      // (stamped by scripts/startLegacyDeadline.js), then need a plan.
+      legacyFreeUntil: { type: Date },
+      // True when the founder's current plan covers this group.
+      coveredByPlan: { type: Boolean, default: false },
+      lastWarningSentAt: { type: Date }, // pre-deadline "subscribe soon" nudge
+      // The founder picked this group to be covered first ("move my plan
+      // here", or bought a plan from this group's screen). Most recent pick
+      // wins; groups never picked follow, oldest first.
+      preferredAt: { type: Date },
+    },
+
     // Health analytics (cached; recomputed)
     healthScore: { type: Number },
     savingsGrowth: { type: Number },
