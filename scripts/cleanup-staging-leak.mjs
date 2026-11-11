@@ -45,10 +45,19 @@ const mask = (p) => (p ? `…${String(p).replace(/\D/g, "").slice(-3)}` : "-");
 const iso = (d) => (d ? new Date(d).toISOString() : "-");
 const sameTime = (a, b) => a && b && new Date(a).getTime() === new Date(b).getTime();
 
-await mongoose.connect(uri);
+// Production's connectDB forces dbName "chuma", so Render's MONGODB_URI may not
+// name a database at all - and without one the driver would silently use "test".
+// Pin it, and refuse anything else.
+const EXPECTED_DB = "chuma";
+await mongoose.connect(uri, { dbName: EXPECTED_DB });
 const db = mongoose.connection.db;
 const host = mongoose.connection.host;
 console.log(`Connected: host=${host} db=${db.databaseName}  mode=${apply ? "APPLY" : "dry run"}`);
+if (db.databaseName !== EXPECTED_DB) {
+  console.error(`Refusing: expected database "${EXPECTED_DB}", got "${db.databaseName}".`);
+  await mongoose.disconnect();
+  process.exit(1);
+}
 console.log(`Window: ${iso(WINDOW_START)} -> ${iso(WINDOW_END)}\n`);
 
 const users = db.collection("users");
